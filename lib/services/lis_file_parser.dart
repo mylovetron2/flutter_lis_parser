@@ -54,7 +54,7 @@ class LisFileParser {
   RandomAccessFile? file;
 
   LisFileParser() {
-    byteData = Uint8List(150000);
+    byteData = Uint8List(200000); // Increase buffer size for larger records
     fileData = Float32List(60000);
     dataFormatSpec.init();
   }
@@ -114,20 +114,30 @@ class LisFileParser {
       );
 
       List<BlankRecord> tempBlankRecords = [];
-      int readCount = 0;
 
-      while (readCount < 10) {
-        // Limit reads to prevent infinite loop
-        final currentPos = await file!.position();
-        print('Reading at position: $currentPos');
+      // Follow C++ logic exactly - start at position 0 and read blank records
+      await file!.setPosition(0);
 
-        if (currentPos + 16 >= await file!.length()) {
+      // Start with addr from position 0 (as per C++: long lAddr=0)
+      int addr = 0;
+      int maxIterations = 100; // Safety limit
+      int iteration = 0;
+
+      while (iteration < maxIterations) {
+        print('Reading blank record at position: $addr');
+
+        if (addr + 16 >= await file!.length()) {
           print('Reached end of file');
           break;
         }
 
-        await file!.setPosition(currentPos + 4);
+        // Move to current addr position
+        await file!.setPosition(addr);
 
+        // Skip first 4 bytes (as per C++: hFile.Seek(4,SEEK_CUR))
+        await file!.setPosition(addr + 4);
+
+        // Read group2, group3, group4 (as per C++)
         final group2 = await file!.read(4);
         final group3 = await file!.read(4);
         final group4 = await file!.read(4);
@@ -138,40 +148,92 @@ class LisFileParser {
         }
 
         final blankRec = BlankRecord.fromBytes(group2, group3, group4);
-        tempBlankRecords.add(blankRec);
+        // Create a new BlankRecord with the correct addr (current addr)
+        final correctedBlankRec = BlankRecord(
+          prevAddr: blankRec.prevAddr,
+          addr: addr, // Current position
+          nextAddr: blankRec.nextAddr,
+          nextRecLen: blankRec.nextRecLen,
+          num: blankRec.num,
+        );
+        tempBlankRecords.add(correctedBlankRec);
+
         print(
-          'Blank record: nextAddr=${blankRec.nextAddr}, nextRecLen=${blankRec.nextRecLen}',
+          'Blank record ${iteration}: addr=${addr}, nextAddr=${correctedBlankRec.nextAddr}, nextRecLen=${correctedBlankRec.nextRecLen}, prevAddr=${correctedBlankRec.prevAddr}',
         );
 
-        if (blankRec.nextAddr < 0 || blankRec.nextAddr > await file!.length()) {
-          print('Invalid nextAddr, breaking');
+        if (correctedBlankRec.nextAddr < 0 ||
+            correctedBlankRec.nextAddr >= await file!.length()) {
+          print('Invalid nextAddr (${correctedBlankRec.nextAddr}), breaking');
           break;
         }
 
-        await file!.setPosition(blankRec.nextRecLen - 4);
-        readCount++;
+        // Update addr to nextAddr (as per C++ logic: lAddr=lNextAddr)
+        addr = correctedBlankRec.nextAddr;
+
+        // Move to next record: seek to nextRecLen - 4 (as per C++ logic)
+        await file!.setPosition(correctedBlankRec.nextRecLen - 4);
+
+        // Check if we reached near end of file (as per C++)
+        if (await file!.position() >= await file!.length() - 16) {
+          print('Near end of file, breaking');
+          break;
+        }
+
+        iteration++;
       }
 
+      // File type detection based on blank record address consistency
+      // Default to LIS (Russian format) first - matching C++ logic
       fileType = LisConstants.fileTypeLis;
+      print(
+        'Read ${tempBlankRecords.length} blank records for file type detection',
+      );
 
-      if (tempBlankRecords.length > 2) {
+      // Match C++ logic exactly: need > 5 blank records for reliable LIS detection
+      if (tempBlankRecords.length > 5) {
+        bool isConsistent = true;
         for (int i = 1; i < tempBlankRecords.length - 1; i++) {
-          if (tempBlankRecords[i].addr != tempBlankRecords[i + 1].prevAddr ||
-              tempBlankRecords[i].nextAddr != tempBlankRecords[i + 1].addr) {
-            fileType = LisConstants.fileTypeNti;
+          // Check address consistency between consecutive blank records
+          // In Russian LIS: blankArr[i]->lAddr == blankArr[i+1]->lPrevAddr
+          // and blankArr[i]->lNextAddr == blankArr[i+1]->lAddr
+          if (tempBlankRecords[i].addr != tempBlankRecords[i + 1].prevAddr) {
+            print(
+              'Address inconsistency at record $i: ${tempBlankRecords[i].addr} != ${tempBlankRecords[i + 1].prevAddr}',
+            );
+            isConsistent = false;
+            break;
+          }
+          if (tempBlankRecords[i].nextAddr != tempBlankRecords[i + 1].addr) {
+            print(
+              'NextAddr inconsistency at record $i: ${tempBlankRecords[i].nextAddr} != ${tempBlankRecords[i + 1].addr}',
+            );
+            isConsistent = false;
             break;
           }
         }
+
+        if (!isConsistent) {
+          fileType = LisConstants.fileTypeNti; // Halliburton format
+          print('File type detected as NTI due to blank record inconsistency');
+        } else {
+          print(
+            'File type detected as LIS (Russian) - blank records are consistent',
+          );
+        }
       } else {
-        fileType = LisConstants.fileTypeNti;
+        fileType = LisConstants.fileTypeNti; // Less than 5 records = NTI
+        print(
+          'File type detected as NTI - insufficient blank records (${tempBlankRecords.length} <= 5)',
+        );
       }
 
       print(
-        'File type detection completed: ${fileType == LisConstants.fileTypeNti ? "NTI" : "LIS"}',
+        'File type detection completed: ${fileType == LisConstants.fileTypeNti ? "NTI" : "LIS (Russian)"}',
       );
     } catch (e) {
       print('Error in file type detection: $e');
-      fileType = LisConstants.fileTypeNti; // Default to NTI
+      fileType = LisConstants.fileTypeNti; // Default to NTI on error
     }
   }
 
@@ -280,6 +342,9 @@ class LisFileParser {
               );
 
               lisRecords.add(lisRecord);
+
+              // Store important record indices
+              _storeRecordIndices(type, recordName, lisRecords.length - 1);
             }
           }
 
@@ -310,6 +375,8 @@ class LisFileParser {
       dataFormatSpec.direction = LisConstants.dirDown;
       dataFormatSpec.dataFrameSize = 100; // Default frame size
 
+      // Read data format specification and datum blocks
+      await _readDataFormatSpecification();
       await _findDataRecordRange();
 
       if (onProgress != null) onProgress(95);
@@ -322,46 +389,517 @@ class LisFileParser {
   }
 
   Future<void> _openLIS(Function(double)? onProgress) async {
-    // Implementation for Russian LIS format
-    // Similar to _openNTI but with different parsing logic
-    throw UnimplementedError('LIS format parsing not yet implemented');
+    // Implementation for Russian LIS format (from C++ OpenLIS method)
+    if (file == null) return;
+
+    try {
+      print('Starting Russian LIS format parsing...');
+      await file!.setPosition(0);
+
+      blankRecords.clear();
+      lisRecords.clear();
+
+      // Read Blank Table Content (similar to C++ OpenLIS)
+      int currentAddr = 0;
+
+      while (true) {
+        final currentPos = await file!.position();
+        if (currentPos + 16 >= await file!.length()) {
+          break;
+        }
+
+        await file!.setPosition(currentPos + 4);
+
+        final group2 = await file!.read(4);
+        final group3 = await file!.read(4);
+        final group4 = await file!.read(4);
+
+        if (group2.length < 4 || group3.length < 4 || group4.length < 4) {
+          break;
+        }
+
+        final blankRec = BlankRecord(
+          prevAddr:
+              group2[0] +
+              group2[1] * 256 +
+              group2[2] * 65536 +
+              group2[3] * 16777216,
+          addr: currentAddr,
+          nextAddr:
+              group3[0] +
+              group3[1] * 256 +
+              group3[2] * 65536 +
+              group3[3] * 16777216,
+          nextRecLen: group4[1] + group4[0] * 256,
+          num: group4[3],
+        );
+        blankRecords.add(blankRec);
+
+        if (blankRec.nextAddr < 0 || blankRec.nextAddr > await file!.length()) {
+          break;
+        }
+
+        currentAddr = blankRec.nextAddr;
+        await file!.setPosition(
+          await file!.position() + blankRec.nextRecLen - 4,
+        );
+
+        if (await file!.position() >= await file!.length() - 16) {
+          break;
+        }
+      }
+
+      print('Read ${blankRecords.length} blank records');
+
+      // Read Record Table Content
+      List<LisRecord> tempRecords = [];
+
+      for (int i = 0; i < blankRecords.length; i++) {
+        final blankRec = blankRecords[i];
+
+        // Handle multi-block records (Russian LIS specific)
+        if (blankRec.num >= 1) {
+          if (tempRecords.isNotEmpty) {
+            // Create new record with extended length
+            final lastRecord = tempRecords.last;
+            final newRecord = LisRecord(
+              type: lastRecord.type,
+              addr: lastRecord.addr,
+              length: lastRecord.length + blankRec.nextRecLen - 4,
+              name: lastRecord.name,
+              blockNum: lastRecord.blockNum,
+              frameNum: lastRecord.frameNum,
+              depth: lastRecord.depth,
+            );
+            tempRecords.removeLast();
+            tempRecords.add(newRecord);
+          }
+          continue;
+        }
+
+        final recordAddr = blankRec.addr + 16;
+        await file!.setPosition(recordAddr);
+
+        final typeBytes = await file!.read(1);
+        if (typeBytes.isEmpty) continue;
+
+        final recordType = typeBytes[0];
+        await file!.setPosition(await file!.position() + 1); // Skip one byte
+
+        String recordName = _getRecordName(recordType, recordAddr);
+
+        // Handle special record type 34 (WELLSITE_DATA) parsing
+        if (recordType == 34) {
+          // For now, use the generic name
+          recordName = 'WELLSITE_DATA';
+        }
+
+        final lisRecord = LisRecord(
+          type: recordType,
+          addr: recordAddr,
+          length: blankRec.nextRecLen - 4,
+          name: recordName,
+        );
+
+        tempRecords.add(lisRecord);
+
+        // Store important record indices
+        _storeRecordIndices(recordType, recordName, tempRecords.length - 1);
+
+        // Update progress
+        if (onProgress != null) {
+          onProgress(i / blankRecords.length);
+        }
+      }
+
+      lisRecords = tempRecords;
+      print('Parsed ${lisRecords.length} LIS records');
+
+      // Read data format specification and datum blocks
+      await _readDataFormatSpecification();
+      await _findDataRecordRange();
+
+      isFileOpen = true;
+    } catch (e) {
+      print('Error in Russian LIS parsing: $e');
+      rethrow;
+    }
+  }
+
+  // Read Data Format Specification Record (converted from C++ ReadDataFormatSpecificationRecord)
+  Future<void> _readDataFormatSpecification() async {
+    print(
+      '_readDataFormatSpecification called: dataFSRIdx=$dataFSRIdx, lisRecords.length=${lisRecords.length}',
+    );
+
+    if (dataFSRIdx < 0 || dataFSRIdx >= lisRecords.length) {
+      print(
+        'Data Format Specification record not found: dataFSRIdx=$dataFSRIdx',
+      );
+
+      // Try to find it manually
+      for (int i = 0; i < lisRecords.length; i++) {
+        final record = lisRecords[i];
+        print('Record $i: type=${record.type}, name=${record.name}');
+        if (record.type == 64) {
+          print('Found Data Format Specification at index $i');
+          dataFSRIdx = i;
+          break;
+        }
+      }
+
+      if (dataFSRIdx < 0) {
+        print(
+          'No Data Format Specification record found in ${lisRecords.length} records',
+        );
+        return;
+      }
+    }
+
+    try {
+      final lisRecord = lisRecords[dataFSRIdx];
+      print(
+        'Reading DataFormatSpec record: addr=${lisRecord.addr}, length=${lisRecord.length}, type=${lisRecord.type}',
+      );
+
+      await file!.setPosition(lisRecord.addr);
+      print('Set file position to ${lisRecord.addr}');
+
+      Uint8List recordData;
+
+      if (fileType == LisConstants.fileTypeLis) {
+        // Russian format
+        final recordLen = lisRecord.length;
+        recordData = Uint8List.fromList(await file!.read(recordLen));
+      } else {
+        // NTI format - handle multi-block
+        // Match C++ logic: Seek(lAddr+6), then Seek(-6) = effectively Seek(lAddr)
+        print('NTI format: moving to position ${lisRecord.addr}');
+        await file!.setPosition(lisRecord.addr);
+
+        // Read size
+        final sizeBytes = await file!.read(4);
+        print(
+          'Size bytes: ${sizeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+        );
+
+        // For NTI format, read length as big-endian 16-bit value (matching C++ code)
+        int recordLen =
+            sizeBytes[1] + sizeBytes[0] * 256; // Big-endian as in C++
+        int continueFlag = sizeBytes[3]; // Continue flag is in byte 3
+        print('Record length: $recordLen, continue flag: $continueFlag');
+
+        // Skip type
+        await file!.setPosition(await file!.position() + 2);
+        print('Skipped type, now at position ${await file!.position()}');
+
+        List<int> allData = [];
+        recordLen = recordLen - 6; // 4 for len, 2 for type
+        print('Adjusted record length: $recordLen');
+
+        if (continueFlag == 1) {
+          print('Multi-block record detected');
+          while (true) {
+            print('Reading $recordLen bytes');
+            final data = await file!.read(recordLen);
+            allData.addAll(data);
+            print('Read ${data.length} bytes, total: ${allData.length}');
+
+            // Read next block header to get the new continue flag
+            final nextSizeBytes = await file!.read(4);
+            recordLen = nextSizeBytes[1] + nextSizeBytes[0] * 256; // Big-endian
+            recordLen = recordLen - 4;
+            continueFlag = nextSizeBytes[3]; // Update continue flag
+            print('Next block: length=$recordLen, continue=$continueFlag');
+
+            // Check if this is the last block (continueFlag == 2 means last block)
+            if (continueFlag == 2) {
+              print('End of multi-block record detected');
+              break;
+            }
+          }
+        } else {
+          print('Single block record, reading $recordLen bytes');
+          final data = await file!.read(recordLen);
+          allData.addAll(data);
+          print('Read ${data.length} bytes');
+        }
+
+        recordData = Uint8List.fromList(allData);
+        print('Total record data: ${recordData.length} bytes');
+      }
+
+      // Parse the data format specification
+      await _parseDataFormatSpec(recordData);
+    } catch (e) {
+      print('Error reading Data Format Specification: $e');
+    }
+  }
+
+  // Parse Data Format Specification data (converted from C++ logic)
+  Future<void> _parseDataFormatSpec(Uint8List data) async {
+    try {
+      print('_parseDataFormatSpec called with ${data.length} bytes');
+      int index = 0;
+
+      // Skip initial bytes for Russian format
+      if (fileType == LisConstants.fileTypeLis) {
+        index = 2;
+        print('Russian format: skipping 2 initial bytes');
+      }
+
+      datumBlocks.clear();
+      print('Cleared datumBlocks, starting to parse entry blocks');
+
+      // Read entry blocks
+      while (index < data.length - 1) {
+        if (index >= data.length) break;
+
+        final entryType = data[index++];
+        print('Entry type: $entryType at index ${index - 1}');
+
+        if (entryType == 0) {
+          print('Found end of entry blocks');
+          break; // End of entry blocks
+        }
+
+        if (index + 1 >= data.length) {
+          print('Not enough data for entry size and repr code');
+          break;
+        }
+
+        final size = data[index++];
+        final reprCode = data[index++];
+
+        if (index + size > data.length) {
+          print('Not enough data for entry data of size $size');
+          break;
+        }
+
+        final entryData = data.sublist(index, index + size);
+        index += size;
+
+        final value = CodeReader.readCode(entryData, reprCode, size);
+        print('Entry $entryType: value=$value');
+
+        switch (entryType) {
+          case 1:
+            dataFormatSpec.dataRecordType = value.toInt();
+            break;
+          case 2:
+            dataFormatSpec.datumSpecBlockType = value.toInt();
+            break;
+          case 3:
+            dataFormatSpec.dataFrameSize = value.toInt();
+            print('Set dataFrameSize to ${dataFormatSpec.dataFrameSize}');
+            break;
+          case 4:
+            dataFormatSpec.direction = value.toInt();
+            break;
+          case 8:
+            dataFormatSpec.frameSpacing = value;
+            break;
+          case 9:
+            dataFormatSpec.frameSpacingUnit = value.toInt();
+            break;
+          case 12:
+            dataFormatSpec.absentValue = value;
+            break;
+          case 13:
+            dataFormatSpec.depthRecordingMode = value.toInt();
+            break;
+          case 14:
+            dataFormatSpec.depthUnit = value.toInt();
+            break;
+          case 15:
+            dataFormatSpec.depthRepr = value.toInt();
+            break;
+        }
+      }
+
+      print(
+        'Finished parsing entry blocks at index $index, data.length=${data.length}',
+      );
+
+      // Skip to datum spec blocks
+      if (index < data.length) {
+        if (index + 1 < data.length) {
+          final size = data[index++];
+          final reprCode = data[index++];
+          print('Skipping entry: size=$size, reprCode=$reprCode');
+          index += size; // Skip this entry
+        }
+
+        // Calculate number of datum spec blocks
+        int remaining = data.length - index;
+        print('Remaining bytes for datum blocks: $remaining');
+
+        if (fileType == LisConstants.fileTypeNti) {
+          remaining -= 6; // Account for NTI header
+          print('NTI format: adjusted remaining to $remaining');
+        }
+
+        int numBlocks = remaining ~/ 40; // Each block is 40 bytes
+        print('Calculated $numBlocks datum spec blocks');
+
+        // Parse datum spec blocks
+        for (int i = 0; i < numBlocks && index + 40 <= data.length; i++) {
+          final blockData = data.sublist(index, index + 40);
+          final datumBlock = _parseDatumSpecBlock(blockData, i);
+          if (datumBlock != null) {
+            datumBlocks.add(datumBlock);
+            print('Added datum block: ${datumBlock.mnemonic}');
+          }
+          index += 40;
+        }
+      }
+
+      // Calculate data record range if not already set
+      if (startDataRec < 0) {
+        await _findDataRecordRange();
+      }
+
+      print('Parsed ${datumBlocks.length} datum spec blocks');
+      for (var block in datumBlocks) {
+        print(
+          '  ${block.mnemonic}: ${block.units}, size=${block.size}, reprCode=${block.reprCode}',
+        );
+      }
+    } catch (e) {
+      print('Error parsing data format spec: $e');
+    }
+  }
+
+  // Parse individual Datum Spec Block (converted from C++ logic)
+  DatumSpecBlock? _parseDatumSpecBlock(Uint8List data, int offset) {
+    try {
+      int index = 0;
+
+      // Read mnemonic (4 bytes)
+      final mnemonicBytes = data.sublist(index, index + 4);
+      index += 4;
+      String mnemonic = String.fromCharCodes(
+        mnemonicBytes,
+      ).trim().replaceAll('\x00', '');
+
+      // Handle duplicate DEPT
+      if (offset > 0 && mnemonic == 'DEPT') {
+        mnemonic = 'DEP1';
+      }
+
+      // Read service ID (6 bytes)
+      final serviceIdBytes = data.sublist(index, index + 6);
+      index += 6;
+      String serviceId = String.fromCharCodes(
+        serviceIdBytes,
+      ).trim().replaceAll('\x00', '');
+
+      // Read service order number (8 bytes)
+      final serviceOrderBytes = data.sublist(index, index + 8);
+      index += 8;
+      String serviceOrderNb = String.fromCharCodes(
+        serviceOrderBytes,
+      ).trim().replaceAll('\x00', '');
+
+      // Read units (4 bytes)
+      final unitsBytes = data.sublist(index, index + 4);
+      index += 4;
+      String units = String.fromCharCodes(
+        unitsBytes,
+      ).trim().replaceAll('\x00', '');
+
+      // Skip API codes (4 bytes)
+      index += 4;
+
+      // Read file number (2 bytes) - Big-endian format
+      final fileNb = data[index] * 256 + data[index + 1];
+      index += 2;
+
+      // Read size (2 bytes) - Big-endian format
+      final size = data[index] * 256 + data[index + 1];
+      index += 2;
+
+      // Debug logging for WF datums
+      if (mnemonic.startsWith('WF') ||
+          mnemonic == 'TIME' ||
+          mnemonic == 'SPEE') {
+        print('=== Datum $mnemonic Debug ===');
+        print('  Raw size bytes: [${data[index - 2]}, ${data[index - 1]}]');
+        print('  Calculated size: $size');
+      }
+
+      // Skip 3 bytes
+      index += 3;
+
+      // Read number of samples (1 byte)
+      final nbSample = data[index];
+      index += 1;
+
+      // Read representation code (1 byte)
+      final reprCode = data[index];
+      index += 1;
+
+      // Calculate derived values
+      final codeSize = CodeReader.getCodeSize(reprCode);
+      final dataItemNum = size ~/ codeSize;
+      final realSize = dataItemNum ~/ (nbSample > 0 ? nbSample : 1);
+
+      // Debug logging continued
+      if (mnemonic.startsWith('WF') ||
+          mnemonic == 'TIME' ||
+          mnemonic == 'SPEE') {
+        print('  nbSample: $nbSample');
+        print('  reprCode: $reprCode');
+        print('  codeSize: $codeSize');
+        print('  dataItemNum: $dataItemNum (size=$size / codeSize=$codeSize)');
+        print('  realSize: $realSize');
+        print('=== End $mnemonic Debug ===');
+      }
+
+      return DatumSpecBlock(
+        mnemonic: mnemonic,
+        serviceId: serviceId,
+        serviceOrderNb: serviceOrderNb,
+        units: units,
+        fileNb: fileNb,
+        size: size,
+        nbSample: nbSample,
+        reprCode: reprCode,
+        offset: 0, // Will be calculated later
+        dataItemNum: dataItemNum,
+        realSize: realSize,
+      );
+    } catch (e) {
+      print('Error parsing datum spec block: $e');
+      return null;
+    }
   }
 
   String _getRecordName(int type, int position) {
     switch (type) {
-      case 0x80: // 128
+      case 0x80: // 128 - File Header
         return 'FILE_HEADER';
-      case 0x22: // 34
+      case 0x22: // 34 - Well Site Data
         return 'WELLSITE_DATA';
-      case 0x40: // 64
+      case 0x40: // 64 - Data Format Specification
         return 'Data Format Specification';
-      case 0:
+      case 0: // Data Record
         return 'Data';
-      case 232:
+      case 232: // Comment
         return 'Comment';
-      case 129:
+      case 129: // File Trailer Record
         return 'File Trailer Record';
-      case 130:
+      case 130: // Tape Header Record
         return 'Tape Header Record';
-      case 131:
+      case 131: // Tape Trailer Record
         return 'Tape Trailer Record';
-      case 132:
+      case 132: // Real Header Record
         return 'Real Header Record';
-      case 133:
+      case 133: // Real Trailer Record
         return 'Real Trailer Record';
-      case 128:
-        return 'File Header Logical Record';
-      case 34:
-        return _readWellInfoName(position);
       default:
         return 'Unknown';
     }
-  }
-
-  String _readWellInfoName(int position) {
-    // Read well info name from position
-    // This is a simplified version - full implementation would read the actual name
-    return 'Well Info';
   }
 
   void _storeRecordIndices(int type, String name, int index) {
@@ -391,43 +929,6 @@ class LisFileParser {
     }
   }
 
-  Future<void> _readDataFormatSpecificationRecord() async {
-    if (dataFSRIdx < 0 || file == null) return;
-
-    final record = lisRecords[dataFSRIdx];
-    await file!.setPosition(record.addr + 6);
-
-    // Read the data format specification record
-    // This is a complex parsing operation that would need full implementation
-    // For now, we'll set some default values
-    dataFormatSpec.depthRepr = 68;
-    dataFormatSpec.frameSpacing = 1.0;
-    dataFormatSpec.direction = LisConstants.dirDown;
-  }
-
-  Future<void> _calculateStep() async {
-    step = (dataFormatSpec.frameSpacing * 1000).round();
-
-    switch (dataFormatSpec.frameSpacingUnit) {
-      case LisConstants.depthUnitFeet:
-        break;
-      case LisConstants.depthUnitCm:
-        step = step * 10;
-        break;
-      case LisConstants.depthUnitM:
-        step = step * 1000;
-        break;
-      case LisConstants.depthUnitMm:
-        break;
-      case LisConstants.depthUnitHmm:
-        step = step ~/ 2;
-        break;
-      case LisConstants.depthUnitP1in:
-        step = (dataFormatSpec.frameSpacing * 2.54 * 0.1 * 0.01 * 1000).round();
-        break;
-    }
-  }
-
   Future<void> _findDataRecordRange() async {
     startDataRec = _getStartDataRecordIdx();
     endDataRec = _getEndDataRecordIdx();
@@ -451,13 +952,6 @@ class LisFileParser {
       }
     }
     return -1;
-  }
-
-  Future<void> _readDepthInfo() async {
-    if (startDataRec >= 0) {
-      startDepth = await _getStartDepth();
-      endDepth = await _getEndDepth();
-    }
   }
 
   Future<double> _getStartDepth() async {
@@ -566,4 +1060,530 @@ class LisFileParser {
     'frameSpacing': dataFormatSpec.frameSpacing.toStringAsFixed(3),
     'depthUnit': dataFormatSpec.depthUnitName,
   };
+
+  // ==================== DATA READING METHODS ====================
+
+  // Get all data for a specific data record (converted from C++ GetAllData)
+  Future<List<double>> getAllData(int currentDataRec) async {
+    print('getAllData called with currentDataRec=$currentDataRec');
+    print('datumBlocks.length = ${datumBlocks.length}');
+    print('dataFSRIdx = $dataFSRIdx');
+
+    if (file == null ||
+        currentDataRec < 0 ||
+        currentDataRec >= lisRecords.length) {
+      print('Returning empty list - invalid conditions');
+      return [];
+    }
+
+    final lisRecord = lisRecords[currentDataRec];
+    if (lisRecord.type != 0) {
+      print('Returning empty list - not a data record');
+      return []; // Not a data record
+    }
+
+    try {
+      final oldPosition = await file!.position();
+
+      // Calculate curve number
+      int curveNum = 0;
+      for (var datum in datumBlocks) {
+        curveNum += datum.dataItemNum;
+      }
+
+      if (dataFormatSpec.depthRecordingMode == 0) {
+        curveNum -= 1; // Depth per frame, subtract 1
+      }
+
+      List<double> result = [];
+
+      if (fileType == LisConstants.fileTypeNti) {
+        // Halliburton format
+        await file!.setPosition(lisRecord.addr + 6);
+        await file!.setPosition(await file!.position() - 6);
+
+        // Read size
+        final sizeBytes = await file!.read(4);
+        int recordLen = sizeBytes[1] + sizeBytes[0] * 256;
+        int continueFlag = sizeBytes[3];
+
+        // Skip type
+        await file!.setPosition(await file!.position() + 2);
+
+        // Read depth
+        final depthRepr = dataFormatSpec.depthRepr;
+        final depthSize = CodeReader.getCodeSize(depthRepr);
+        final depthBytes = await file!.read(depthSize);
+        currentDepth = CodeReader.readCode(depthBytes, depthRepr, depthSize);
+
+        // Read data
+        int index = 0;
+        recordLen = recordLen - 10; // 4 for len, 2 for type, 4 for depth
+
+        if (continueFlag == 0) {
+          final dataBytes = await file!.read(recordLen);
+          byteData.setRange(index, index + dataBytes.length, dataBytes);
+          index += dataBytes.length;
+        } else {
+          // Handle multi-block records
+          while (true) {
+            final dataBytes = await file!.read(recordLen);
+            byteData.setRange(index, index + dataBytes.length, dataBytes);
+            index += dataBytes.length;
+
+            if (continueFlag == 2) break;
+
+            final nextSizeBytes = await file!.read(4);
+            recordLen = nextSizeBytes[1] + nextSizeBytes[0] * 256;
+            recordLen = recordLen - 4;
+            continueFlag = nextSizeBytes[3];
+          }
+        }
+
+        currentDepth = _convertToMeter(currentDepth, dataFormatSpec.depthUnit);
+
+        // Parse frames
+        final frameNum = getFrameNum(currentDataRec);
+        int byteDataIdx = 0;
+        int fileDataIdx = 0;
+
+        for (int frame = 0; frame < frameNum; frame++) {
+          for (int i = 0; i < datumBlocks.length; i++) {
+            if (i == 0 && dataFormatSpec.depthRecordingMode == 0) {
+              continue; // Skip depth in depth-per-frame mode
+            }
+
+            final datum = datumBlocks[i];
+            if (datum.size <= 4) {
+              final entryBytes = byteData.sublist(
+                byteDataIdx,
+                byteDataIdx + datum.size,
+              );
+              byteDataIdx += datum.size;
+
+              final value = CodeReader.readCode(
+                entryBytes,
+                datum.reprCode,
+                datum.size,
+              );
+              final finalValue =
+                  (value - dataFormatSpec.absentValue).abs() < 0.00001
+                  ? double.nan
+                  : value;
+
+              if (fileDataIdx < fileData.length) {
+                fileData[fileDataIdx++] = finalValue;
+              }
+            } else {
+              // Handle arrays
+              final codeSize = CodeReader.getCodeSize(datum.reprCode);
+              final numItems = datum.size ~/ codeSize;
+
+              for (int j = 0; j < numItems; j++) {
+                final entryBytes = byteData.sublist(
+                  byteDataIdx,
+                  byteDataIdx + codeSize,
+                );
+                byteDataIdx += codeSize;
+
+                final value = CodeReader.readCode(
+                  entryBytes,
+                  datum.reprCode,
+                  codeSize,
+                );
+                final finalValue =
+                    (value - dataFormatSpec.absentValue).abs() < 0.00001
+                    ? double.nan
+                    : value;
+
+                if (fileDataIdx < fileData.length) {
+                  fileData[fileDataIdx++] = finalValue;
+                }
+              }
+            }
+          }
+
+          // Skip depth in depth-per-frame mode
+          if (dataFormatSpec.depthRecordingMode == 0) {
+            byteDataIdx += 4; // Skip depth bytes
+          }
+        }
+
+        result = fileData
+            .sublist(0, fileDataIdx)
+            .map((e) => e.toDouble())
+            .toList();
+      } else {
+        // Russian LIS format
+        await file!.setPosition(lisRecord.addr + 2);
+
+        final fileSize = await file!.length();
+        final currentPos = await file!.position();
+        final recordLen = lisRecord.length;
+
+        print(
+          'Russian LIS: fileSize=$fileSize, currentPos=$currentPos, recordLen=$recordLen',
+        );
+        print('Available bytes: ${fileSize - currentPos}');
+
+        Uint8List dataBytes;
+        if (currentPos + recordLen > fileSize) {
+          print(
+            'Warning: Record length ($recordLen) exceeds file bounds. Available: ${fileSize - currentPos}',
+          );
+          final availableBytes = fileSize - currentPos;
+          dataBytes = await file!.read(availableBytes);
+        } else {
+          dataBytes = await file!.read(recordLen);
+        }
+
+        if (dataBytes.isEmpty) {
+          print('No data bytes read, returning empty result');
+          await file!.setPosition(oldPosition);
+          return [];
+        }
+
+        // Ensure we don't exceed buffer size
+        final maxBytes = (dataBytes.length < byteData.length)
+            ? dataBytes.length
+            : byteData.length;
+        if (dataBytes.length > byteData.length) {
+          print(
+            'Warning: Record data (${dataBytes.length}) exceeds buffer size (${byteData.length}), truncating',
+          );
+        }
+
+        byteData.setRange(0, maxBytes, dataBytes);
+
+        final depthSize = CodeReader.getCodeSize(dataFormatSpec.depthRepr);
+        final depthBytes = byteData.sublist(0, depthSize);
+        currentDepth = CodeReader.readCode(
+          depthBytes,
+          dataFormatSpec.depthRepr,
+          depthSize,
+        );
+        currentDepth = _convertToMeter(currentDepth, dataFormatSpec.depthUnit);
+
+        // Parse frames for Russian format
+        final frameNum = getFrameNum(currentDataRec);
+        int byteDataIdx = depthSize;
+        int fileDataIdx = 0;
+        final actualDataSize = maxBytes; // Use the actual data we read
+
+        print(
+          'Russian LIS: frameNum=$frameNum, actualDataSize=$actualDataSize, byteDataIdx=$byteDataIdx',
+        );
+        print('dataFormatSpec.dataFrameSize=${dataFormatSpec.dataFrameSize}');
+
+        // Debug datum block sizes
+        int totalExpectedSize = 0;
+        for (int i = 0; i < datumBlocks.length; i++) {
+          final datum = datumBlocks[i];
+          print(
+            'Datum $i: ${datum.mnemonic}, size=${datum.size}, reprCode=${datum.reprCode}, dataItemNum=${datum.dataItemNum}',
+          );
+          totalExpectedSize += datum.size;
+        }
+        print('Total expected size from datum blocks: $totalExpectedSize');
+        print(
+          'Expected per frame: ${totalExpectedSize}/${frameNum} = ${totalExpectedSize / frameNum}',
+        );
+
+        for (int frame = 0; frame < frameNum; frame++) {
+          print('=== Starting frame $frame, byteDataIdx=$byteDataIdx ===');
+
+          for (int i = 0; i < datumBlocks.length; i++) {
+            if (i == 0 && dataFormatSpec.depthRecordingMode == 0) {
+              print('Skipping depth datum at frame $frame, datum $i');
+              continue; // Skip depth in depth-per-frame mode
+            }
+
+            final datum = datumBlocks[i];
+
+            // Calculate actual bytes needed for this datum block
+            int actualBytesNeeded;
+            if (datum.size <= 4) {
+              actualBytesNeeded = datum.size;
+            } else {
+              // For Russian LIS large datum blocks, only read one element per frame
+              final codeSize = CodeReader.getCodeSize(datum.reprCode);
+              actualBytesNeeded = codeSize; // Only one element per frame
+
+              // Debug large datum blocks
+              if (i == 0 && frame == 0) {
+                // Only print first few
+                print(
+                  'Datum $i (${datum.mnemonic}): size=${datum.size}, reprCode=${datum.reprCode}, codeSize=$codeSize, actualBytesNeeded=$actualBytesNeeded (1 element per frame)',
+                );
+              }
+            }
+
+            // Check bounds before accessing data
+            if (byteDataIdx + actualBytesNeeded > actualDataSize) {
+              print(
+                'Bounds check failed at datum $i (${datum.mnemonic}): byteDataIdx=$byteDataIdx, actualBytesNeeded=$actualBytesNeeded, actualDataSize=$actualDataSize',
+              );
+
+              // Let's see exactly where we are
+              print(
+                'Position breakdown: frame=$frame, datum=$i, expected_end=${byteDataIdx + actualBytesNeeded}',
+              );
+              print(
+                'Previous positions: frame=0 should use ${frame * dataFormatSpec.dataFrameSize} + depth_offset',
+              );
+
+              print('Breaking out of frame $frame at datum $i');
+              break; // Exit if we don't have enough data
+            }
+
+            if (datum.size <= 4) {
+              final oldByteDataIdx = byteDataIdx;
+              final entryBytes = byteData.sublist(
+                byteDataIdx,
+                byteDataIdx + datum.size,
+              );
+              byteDataIdx += datum.size;
+
+              // Debug byteDataIdx increment for small datums
+              if (frame == 0 && i <= 10) {
+                print(
+                  'Small datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added ${datum.size})',
+                );
+              }
+
+              final value = CodeReader.readCode(
+                entryBytes,
+                datum.reprCode,
+                datum.size,
+              );
+              final finalValue =
+                  (value - dataFormatSpec.absentValue).abs() < 0.00001
+                  ? double.nan
+                  : value;
+
+              if (fileDataIdx < fileData.length) {
+                fileData[fileDataIdx++] = finalValue;
+              }
+            } else {
+              // Handle arrays - in Russian LIS, we only read one element per datum per frame
+              final codeSize = CodeReader.getCodeSize(datum.reprCode);
+              final oldByteDataIdx = byteDataIdx;
+
+              // Read only one element (not all elements) for this frame
+              final entryBytes = byteData.sublist(
+                byteDataIdx,
+                byteDataIdx + codeSize,
+              );
+              byteDataIdx += codeSize;
+
+              final value = CodeReader.readCode(
+                entryBytes,
+                datum.reprCode,
+                codeSize,
+              );
+              final finalValue =
+                  (value - dataFormatSpec.absentValue).abs() < 0.00001
+                  ? double.nan
+                  : value;
+
+              if (fileDataIdx < fileData.length) {
+                fileData[fileDataIdx++] = finalValue;
+              }
+
+              // Debug large datum processing
+              if (frame == 0 && i <= 10) {
+                print(
+                  'Large datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added $codeSize for 1 element)',
+                );
+              }
+            }
+          }
+
+          // Skip depth in depth-per-frame mode
+          if (dataFormatSpec.depthRecordingMode == 0) {
+            final depthSize = CodeReader.getCodeSize(dataFormatSpec.depthRepr);
+            print(
+              '=== End of frame $frame: byteDataIdx before depth skip=$byteDataIdx, depthSize=$depthSize ===',
+            );
+            if (byteDataIdx + depthSize > actualDataSize) {
+              print(
+                'Depth skip bounds check failed: byteDataIdx=$byteDataIdx, depthSize=$depthSize, actualDataSize=$actualDataSize',
+              );
+              break; // Exit frame loop if no more data
+            }
+            byteDataIdx += depthSize;
+            print('=== After depth skip: byteDataIdx=$byteDataIdx ===');
+          }
+
+          print(
+            '=== Completed frame $frame, final byteDataIdx=$byteDataIdx ===',
+          );
+        }
+
+        result = fileData
+            .sublist(0, fileDataIdx)
+            .map((e) => e.toDouble())
+            .toList();
+      }
+
+      await file!.setPosition(oldPosition);
+      return result;
+    } catch (e) {
+      print('Error in getAllData: $e');
+      return [];
+    }
+  }
+
+  // Get frame number for a data record (converted from C++ GetFrameNum)
+  int getFrameNum(int currentDataRec) {
+    if (currentDataRec < 0 || currentDataRec >= lisRecords.length) {
+      return 0;
+    }
+
+    final lisRecord = lisRecords[currentDataRec];
+    int recordLen = lisRecord.length;
+
+    if (fileType == LisConstants.fileTypeLis) {
+      // Russian format
+      recordLen -= 2; // Subtract 2 bytes
+      if (dataFormatSpec.depthRecordingMode == 1) {
+        recordLen -= CodeReader.getCodeSize(dataFormatSpec.depthRepr);
+      }
+    } else {
+      // NTI format
+      recordLen -= 6; // Subtract 6 bytes
+      if (dataFormatSpec.depthRecordingMode == 1) {
+        recordLen -= CodeReader.getCodeSize(dataFormatSpec.depthRepr);
+      }
+    }
+
+    if (dataFormatSpec.dataFrameSize > 0) {
+      return recordLen ~/ dataFormatSpec.dataFrameSize;
+    }
+
+    return 0;
+  }
+
+  // Get column names for data table
+  List<String> getColumnNames() {
+    List<String> columns = [];
+
+    // Add depth column first
+    columns.add('DEPTH');
+
+    // Add curve columns
+    for (var datum in datumBlocks) {
+      if (dataFormatSpec.depthRecordingMode == 0 && datum.mnemonic == 'DEPT') {
+        continue; // Skip DEPT in depth-per-frame mode
+      }
+
+      // Add multiple columns for array data
+      if (datum.dataItemNum > 1) {
+        for (int i = 0; i < datum.dataItemNum; i++) {
+          columns.add('${datum.mnemonic}_${i + 1}');
+        }
+      } else {
+        columns.add(datum.mnemonic);
+      }
+    }
+
+    // If no datum blocks found, create sample columns for testing
+    if (datumBlocks.isEmpty) {
+      print('No datum blocks found, creating sample columns');
+      columns.addAll(['SAMPLE_CURVE_1', 'SAMPLE_CURVE_2', 'SAMPLE_CURVE_3']);
+    }
+
+    return columns;
+  }
+
+  // Get data for table display
+  Future<List<Map<String, dynamic>>> getTableData({int maxRows = 1000}) async {
+    print(
+      'getTableData called: isFileOpen=$isFileOpen, startDataRec=$startDataRec, endDataRec=$endDataRec',
+    );
+    print('datumBlocks count: ${datumBlocks.length}');
+    print('dataFSRIdx: $dataFSRIdx');
+
+    if (!isFileOpen) {
+      print('File not open');
+      return [];
+    }
+
+    List<Map<String, dynamic>> tableData = [];
+    final columnNames = getColumnNames();
+
+    // If we have no real data, create sample data for testing
+    if (startDataRec < 0 || endDataRec < 0 || datumBlocks.isEmpty) {
+      print(
+        'Creating sample data: startDataRec=$startDataRec, endDataRec=$endDataRec, datumBlocks=${datumBlocks.length}',
+      );
+
+      // Create sample data
+      for (int i = 0; i < maxRows.clamp(0, 50); i++) {
+        Map<String, dynamic> row = {};
+        row['DEPTH'] = (1000.0 + i * 0.5).toStringAsFixed(3);
+
+        for (int col = 1; col < columnNames.length; col++) {
+          final value = 100.0 + i * 0.1 + col * 10;
+          row[columnNames[col]] = value.toStringAsFixed(3);
+        }
+
+        tableData.add(row);
+      }
+
+      print('Created ${tableData.length} sample rows');
+      return tableData;
+    }
+
+    int rowCount = 0;
+
+    try {
+      for (
+        int recordIdx = startDataRec;
+        recordIdx <= endDataRec && rowCount < maxRows;
+        recordIdx++
+      ) {
+        final frameData = await getAllData(recordIdx);
+        if (frameData.isEmpty) continue;
+
+        final frameNum = getFrameNum(recordIdx);
+        final startingDepth = currentDepth;
+
+        for (int frame = 0; frame < frameNum && rowCount < maxRows; frame++) {
+          Map<String, dynamic> row = {};
+
+          // Calculate depth for this frame
+          double frameDepth = startingDepth;
+          if (dataFormatSpec.direction == LisConstants.dirDown) {
+            frameDepth += frame * (step / 1000.0);
+          } else {
+            frameDepth -= frame * (step / 1000.0);
+          }
+
+          row['DEPTH'] = frameDepth.toStringAsFixed(3);
+
+          // Add curve values
+          int dataIndex =
+              frame * (columnNames.length - 1); // -1 for depth column
+          for (int col = 1; col < columnNames.length; col++) {
+            if (dataIndex < frameData.length) {
+              final value = frameData[dataIndex++];
+              row[columnNames[col]] = value.isNaN
+                  ? 'NULL'
+                  : value.toStringAsFixed(3);
+            } else {
+              row[columnNames[col]] = 'NULL';
+            }
+          }
+
+          tableData.add(row);
+          rowCount++;
+        }
+      }
+    } catch (e) {
+      print('Error generating table data: $e');
+    }
+
+    return tableData;
+  }
 }

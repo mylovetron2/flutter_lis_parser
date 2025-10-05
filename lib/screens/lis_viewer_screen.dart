@@ -3,6 +3,7 @@ import '../services/lis_file_parser.dart';
 import '../widgets/file_info_card.dart';
 import '../widgets/records_list.dart';
 import '../widgets/curves_viewer.dart';
+import '../widgets/data_table_widget.dart';
 
 class LisViewerScreen extends StatefulWidget {
   final LisFileParser parser;
@@ -20,7 +21,7 @@ class _LisViewerScreenState extends State<LisViewerScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -41,6 +42,7 @@ class _LisViewerScreenState extends State<LisViewerScreen>
             Tab(icon: Icon(Icons.info), text: 'File Info'),
             Tab(icon: Icon(Icons.list), text: 'Records'),
             Tab(icon: Icon(Icons.show_chart), text: 'Curves'),
+            Tab(icon: Icon(Icons.table_chart), text: 'Data Table'),
           ],
         ),
       ),
@@ -56,6 +58,11 @@ class _LisViewerScreenState extends State<LisViewerScreen>
           RecordsList(parser: widget.parser),
           // Curves Tab
           CurvesViewer(parser: widget.parser),
+          // Data Table Tab
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: DataTableWidget(parser: widget.parser),
+          ),
         ],
       ),
     );
