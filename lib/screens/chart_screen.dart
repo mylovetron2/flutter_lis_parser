@@ -321,14 +321,14 @@ class _ChartScreenState extends State<ChartScreen> {
       );
     }
 
-    return Row(
+    return Column(
       children: [
-        // Left sidebar for curve selection
+        // Top sidebar for curve selection
         Container(
-          width: 300,
+          height: 200,
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
+              bottom: BorderSide(
                 color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
               ),
             ),
@@ -338,9 +338,9 @@ class _ChartScreenState extends State<ChartScreen> {
 
         // Main chart area
         Expanded(
-          child: Column(
+          child: Row(
             children: [
-              // Time Track
+              // Frame Index Track (Left)
               Expanded(
                 flex: 1,
                 child: _buildTrackChart(chartConfig.timeTrack, true),
@@ -348,11 +348,11 @@ class _ChartScreenState extends State<ChartScreen> {
 
               // Divider
               Container(
-                height: 1,
+                width: 1,
                 color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
               ),
 
-              // Depth Track
+              // Depth Track (Right)
               Expanded(
                 flex: 1,
                 child: _buildTrackChart(chartConfig.depthTrack, false),
@@ -365,19 +365,22 @@ class _ChartScreenState extends State<ChartScreen> {
   }
 
   Widget _buildCurveSelector() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
         Container(
           padding: const EdgeInsets.all(16),
-          child: Text('Curves', style: Theme.of(context).textTheme.titleLarge),
+          child: Text('Curves', style: Theme.of(context).textTheme.titleMedium),
         ),
         Expanded(
-          child: ListView(
+          child: Row(
             children: [
-              _buildTrackCurveList('Frame Index Track', chartConfig.timeTrack),
-              const Divider(),
-              _buildTrackCurveList('Depth Track', chartConfig.depthTrack),
+              Expanded(
+                child: _buildTrackCurveList('Frame Index Track', chartConfig.timeTrack),
+              ),
+              const VerticalDivider(),
+              Expanded(
+                child: _buildTrackCurveList('Depth Track', chartConfig.depthTrack),
+              ),
             ],
           ),
         ),
@@ -386,12 +389,26 @@ class _ChartScreenState extends State<ChartScreen> {
   }
 
   Widget _buildTrackCurveList(String trackName, chart_data.TrackConfig track) {
-    return ExpansionTile(
-      title: Text(trackName),
-      initiallyExpanded: true,
-      children: track.curves
-          .map((curve) => _buildCurveItem(curve, track))
-          .toList(),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text(
+            trackName,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            children: track.curves
+                .map((curve) => _buildCurveItem(curve, track))
+                .toList(),
+          ),
+        ),
+      ],
     );
   }
 
