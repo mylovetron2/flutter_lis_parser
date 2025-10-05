@@ -197,15 +197,15 @@ class CodeReader {
   }
 
   static double _read16BitInteger(Uint8List entry) {
-    if (entry[0] > 128) {
-      int temp = entry[0];
-      temp <<= 8;
-      temp += entry[1];
-      temp = ~temp;
-      temp += 1;
-      return (-1 * temp).toDouble();
-    } else {
-      return (entry[0] * 256 + entry[1]).toDouble();
+    // Read as big-endian 16-bit value
+    int value = (entry[0] << 8) | entry[1];
+
+    // Check if this is a negative value (MSB set)
+    if (value >= 0x8000) {
+      // Convert from two's complement to negative
+      value = value - 0x10000;
     }
+
+    return value.toDouble();
   }
 }

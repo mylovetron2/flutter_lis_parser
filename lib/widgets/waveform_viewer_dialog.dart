@@ -166,14 +166,23 @@ class _WaveformViewerDialogState extends State<WaveformViewerDialog> {
   }
 
   Widget _buildChart() {
-    final spots = waveformData.asMap().entries.map((entry) {
+    // Filter out NaN and infinite values
+    final validData = waveformData
+        .where((value) => value.isFinite && !value.isNaN)
+        .toList();
+
+    if (validData.isEmpty) {
+      return const Center(child: Text('No valid waveform data available'));
+    }
+
+    final spots = validData.asMap().entries.map((entry) {
       return FlSpot(entry.key.toDouble(), entry.value);
     }).toList();
 
-    final minY = waveformData.reduce((a, b) => a < b ? a : b);
-    final maxY = waveformData.reduce((a, b) => a > b ? a : b);
+    final minY = validData.reduce((a, b) => a < b ? a : b);
+    final maxY = validData.reduce((a, b) => a > b ? a : b);
     final range = maxY - minY;
-    final padding = range * 0.1;
+    final padding = range > 0 ? range * 0.1 : 1.0;
 
     return Card(
       child: Padding(
@@ -212,10 +221,7 @@ class _WaveformViewerDialogState extends State<WaveformViewerDialog> {
                 sideTitles: SideTitles(
                   showTitles: true,
                   reservedSize: 30,
-                  interval: (waveformData.length / 10).clamp(
-                    1,
-                    double.infinity,
-                  ),
+                  interval: (validData.length / 10).clamp(1, double.infinity),
                   getTitlesWidget: (value, meta) {
                     return Text(
                       value.toInt().toString(),
@@ -233,20 +239,20 @@ class _WaveformViewerDialogState extends State<WaveformViewerDialog> {
             ),
             borderData: FlBorderData(show: false),
             minX: 0,
-            maxX: (waveformData.length - 1).toDouble(),
+            maxX: (validData.length - 1).toDouble(),
             minY: minY - padding,
             maxY: maxY + padding,
             lineBarsData: [
               LineChartBarData(
                 spots: spots,
                 isCurved: false,
-                color: Theme.of(context).colorScheme.primary,
+                color: Colors.red,
                 barWidth: 2,
                 isStrokeCapRound: true,
                 dotData: const FlDotData(show: false),
                 belowBarData: BarAreaData(
                   show: true,
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  color: Colors.red.withOpacity(0.1),
                 ),
               ),
             ],
@@ -271,9 +277,23 @@ class _WaveformViewerDialogState extends State<WaveformViewerDialog> {
   }
 
   Widget _buildStatsFooter() {
-    final minValue = waveformData.reduce((a, b) => a < b ? a : b);
-    final maxValue = waveformData.reduce((a, b) => a > b ? a : b);
-    final avgValue = waveformData.reduce((a, b) => a + b) / waveformData.length;
+    // Filter out NaN and infinite values for stats
+    final validData = waveformData
+        .where((value) => value.isFinite && !value.isNaN)
+        .toList();
+
+    if (validData.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text('No valid data for statistics'),
+        ),
+      );
+    }
+
+    final minValue = validData.reduce((a, b) => a < b ? a : b);
+    final maxValue = validData.reduce((a, b) => a > b ? a : b);
+    final avgValue = validData.reduce((a, b) => a + b) / validData.length;
 
     return Card(
       child: Padding(
@@ -281,7 +301,10 @@ class _WaveformViewerDialogState extends State<WaveformViewerDialog> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _buildStatItem('Points', waveformData.length.toString()),
+            _buildStatItem(
+              'Points',
+              '${validData.length}/${waveformData.length}',
+            ),
             _buildStatItem('Min', minValue.toStringAsFixed(3)),
             _buildStatItem('Max', maxValue.toStringAsFixed(3)),
             _buildStatItem('Avg', avgValue.toStringAsFixed(3)),
