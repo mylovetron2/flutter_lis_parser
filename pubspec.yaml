@@ -44,6 +44,9 @@ dependencies:
   # Charts for data visualization
   fl_chart: ^0.68.0
   
+  # Syncfusion charts for advanced charting
+  syncfusion_flutter_charts: ^26.2.14
+  
   # Material design components
   material_color_generator: ^1.1.0
 

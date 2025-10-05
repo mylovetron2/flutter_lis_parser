@@ -4,6 +4,7 @@ import '../widgets/file_info_card.dart';
 import '../widgets/records_list.dart';
 import '../widgets/curves_viewer.dart';
 import '../widgets/data_table_widget.dart';
+import 'chart_screen.dart';
 
 class LisViewerScreen extends StatefulWidget {
   final LisFileParser parser;
@@ -36,6 +37,19 @@ class _LisViewerScreenState extends State<LisViewerScreen>
       appBar: AppBar(
         title: Text('LIS File - ${widget.parser.fileInfo['fileName']}'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.timeline),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => ChartScreen(parser: widget.parser),
+                ),
+              );
+            },
+            tooltip: 'Open Charts',
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           tabs: const [
