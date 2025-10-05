@@ -1085,10 +1085,14 @@ class LisFileParser {
     try {
       final oldPosition = await file!.position();
 
-      // Calculate curve number
+      // Calculate curve number (following C++ logic)
       int curveNum = 0;
       for (var datum in datumBlocks) {
-        curveNum += datum.dataItemNum;
+        if (datum.size <= 4) {
+          curveNum += 1; // Single value datum contributes 1
+        } else {
+          curveNum += datum.dataItemNum; // Array datum contributes all elements
+        }
       }
 
       if (dataFormatSpec.depthRecordingMode == 0) {
@@ -1300,22 +1304,12 @@ class LisFileParser {
 
             final datum = datumBlocks[i];
 
-            // Calculate actual bytes needed for this datum block
+            // Calculate actual bytes needed for this datum block (following C++ logic)
             int actualBytesNeeded;
             if (datum.size <= 4) {
-              actualBytesNeeded = datum.size;
+              actualBytesNeeded = datum.size; // Single value - read entire size
             } else {
-              // For Russian LIS large datum blocks, only read one element per frame
-              final codeSize = CodeReader.getCodeSize(datum.reprCode);
-              actualBytesNeeded = codeSize; // Only one element per frame
-
-              // Debug large datum blocks
-              if (i == 0 && frame == 0) {
-                // Only print first few
-                print(
-                  'Datum $i (${datum.mnemonic}): size=${datum.size}, reprCode=${datum.reprCode}, codeSize=$codeSize, actualBytesNeeded=$actualBytesNeeded (1 element per frame)',
-                );
-              }
+              actualBytesNeeded = datum.size; // Array - read all elements in this frame
             }
 
             // Check bounds before accessing data
@@ -1337,6 +1331,7 @@ class LisFileParser {
             }
 
             if (datum.size <= 4) {
+              // Single value datum - read the entire size (following C++ logic)
               final oldByteDataIdx = byteDataIdx;
               final entryBytes = byteData.sublist(
                 byteDataIdx,
@@ -1344,10 +1339,10 @@ class LisFileParser {
               );
               byteDataIdx += datum.size;
 
-              // Debug byteDataIdx increment for small datums
+              // Debug byteDataIdx increment for single value datums
               if (frame == 0 && i <= 10) {
                 print(
-                  'Small datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added ${datum.size})',
+                  'Single datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added ${datum.size})',
                 );
               }
 
@@ -1365,35 +1360,38 @@ class LisFileParser {
                 fileData[fileDataIdx++] = finalValue;
               }
             } else {
-              // Handle arrays - in Russian LIS, we only read one element per datum per frame
+              // Handle multi-value arrays - following C++ logic, read ALL elements in one frame
               final codeSize = CodeReader.getCodeSize(datum.reprCode);
+              final numElements = datum.size ~/ codeSize; // Calculate number of elements
               final oldByteDataIdx = byteDataIdx;
 
-              // Read only one element (not all elements) for this frame
-              final entryBytes = byteData.sublist(
-                byteDataIdx,
-                byteDataIdx + codeSize,
-              );
-              byteDataIdx += codeSize;
+              // Read all elements of the array in this frame (following C++ approach)
+              for (int j = 0; j < numElements; j++) {
+                final entryBytes = byteData.sublist(
+                  byteDataIdx,
+                  byteDataIdx + codeSize,
+                );
+                byteDataIdx += codeSize;
 
-              final value = CodeReader.readCode(
-                entryBytes,
-                datum.reprCode,
-                codeSize,
-              );
-              final finalValue =
-                  (value - dataFormatSpec.absentValue).abs() < 0.00001
-                  ? double.nan
-                  : value;
+                final value = CodeReader.readCode(
+                  entryBytes,
+                  datum.reprCode,
+                  codeSize, // Use codeSize instead of datum.size for individual elements
+                );
+                final finalValue =
+                    (value - dataFormatSpec.absentValue).abs() < 0.00001
+                    ? double.nan
+                    : value;
 
-              if (fileDataIdx < fileData.length) {
-                fileData[fileDataIdx++] = finalValue;
+                if (fileDataIdx < fileData.length) {
+                  fileData[fileDataIdx++] = finalValue;
+                }
               }
 
-              // Debug large datum processing
+              // Debug array datum processing
               if (frame == 0 && i <= 10) {
                 print(
-                  'Large datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added $codeSize for 1 element)',
+                  'Array datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added ${datum.size} for $numElements elements)',
                 );
               }
             }
