@@ -1309,7 +1309,8 @@ class LisFileParser {
             if (datum.size <= 4) {
               actualBytesNeeded = datum.size; // Single value - read entire size
             } else {
-              actualBytesNeeded = datum.size; // Array - read all elements in this frame
+              actualBytesNeeded =
+                  datum.size; // Array - read all elements in this frame
             }
 
             // Check bounds before accessing data
@@ -1362,7 +1363,8 @@ class LisFileParser {
             } else {
               // Handle multi-value arrays - following C++ logic, read ALL elements in one frame
               final codeSize = CodeReader.getCodeSize(datum.reprCode);
-              final numElements = datum.size ~/ codeSize; // Calculate number of elements
+              final numElements =
+                  datum.size ~/ codeSize; // Calculate number of elements
               final oldByteDataIdx = byteDataIdx;
 
               // Read all elements of the array in this frame (following C++ approach)
@@ -1475,14 +1477,9 @@ class LisFileParser {
         continue; // Skip DEPT in depth-per-frame mode
       }
 
-      // Add multiple columns for array data
-      if (datum.dataItemNum > 1) {
-        for (int i = 0; i < datum.dataItemNum; i++) {
-          columns.add('${datum.mnemonic}_${i + 1}');
-        }
-      } else {
-        columns.add(datum.mnemonic);
-      }
+      // For both single values and arrays, just add one column
+      // Arrays will display "..." and be clickable to show waveform
+      columns.add(datum.mnemonic);
     }
 
     // If no datum blocks found, create sample columns for testing
@@ -1492,6 +1489,97 @@ class LisFileParser {
     }
 
     return columns;
+  }
+
+  // Check if a column represents an array datum
+  bool isArrayColumn(String columnName) {
+    if (columnName == 'DEPTH') return false;
+
+    final datum = datumBlocks.firstWhere(
+      (d) => d.mnemonic == columnName,
+      orElse: () => datumBlocks.first, // fallback
+    );
+
+    return datum.size > 4; // Array datums have size > 4
+  }
+
+  // Get array data for a specific datum at a specific record and frame
+  Future<List<double>> getArrayData(
+    String columnName,
+    int recordIdx,
+    int frameIdx,
+  ) async {
+    try {
+      print(
+        'getArrayData called: columnName=$columnName, recordIdx=$recordIdx, frameIdx=$frameIdx',
+      );
+
+      final datum = datumBlocks.firstWhere(
+        (d) => d.mnemonic == columnName,
+        orElse: () => throw Exception('Datum $columnName not found'),
+      );
+
+      if (datum.size <= 4) {
+        // Not an array, return empty list
+        print('$columnName is not an array (size=${datum.size})');
+        return [];
+      }
+
+      print(
+        'Found array datum $columnName with size=${datum.size}, dataItemNum=${datum.dataItemNum}',
+      );
+
+      // Use existing getAllData method to get the full data
+      final allData = await getAllData(recordIdx);
+      if (allData.isEmpty) {
+        print('No data returned from getAllData for record $recordIdx');
+        return [];
+      }
+
+      // Calculate total values per frame
+      int valuesPerFrame = 0;
+      for (final d in datumBlocks) {
+        if (d.size <= 4) {
+          valuesPerFrame += 1; // Single values
+        } else {
+          valuesPerFrame += d.dataItemNum; // Array values
+        }
+      }
+
+      // Calculate start index for this frame
+      final frameStartIdx = frameIdx * valuesPerFrame;
+
+      // Calculate start index for this specific datum in the frame
+      int datumStartIdx = frameStartIdx;
+      for (int i = 0; i < datumBlocks.length; i++) {
+        if (datumBlocks[i].mnemonic == columnName) {
+          break;
+        }
+        if (datumBlocks[i].size <= 4) {
+          datumStartIdx += 1; // Single value
+        } else {
+          datumStartIdx += datumBlocks[i].dataItemNum; // Array values
+        }
+      }
+
+      final datumEndIdx = datumStartIdx + datum.dataItemNum;
+
+      if (datumEndIdx <= allData.length) {
+        final arrayData = allData.sublist(datumStartIdx, datumEndIdx);
+        print(
+          'Extracted ${arrayData.length} values for $columnName from indices $datumStartIdx to $datumEndIdx',
+        );
+        return arrayData;
+      } else {
+        print(
+          'Index out of bounds: trying to extract $datumStartIdx to $datumEndIdx from ${allData.length} values',
+        );
+        return [];
+      }
+    } catch (e) {
+      print('Error in getArrayData: $e');
+      return [];
+    }
   }
 
   // Get data for table display
@@ -1560,17 +1648,62 @@ class LisFileParser {
 
           row['DEPTH'] = frameDepth.toStringAsFixed(3);
 
-          // Add curve values
-          int dataIndex =
-              frame * (columnNames.length - 1); // -1 for depth column
-          for (int col = 1; col < columnNames.length; col++) {
-            if (dataIndex < frameData.length) {
-              final value = frameData[dataIndex++];
-              row[columnNames[col]] = value.isNaN
-                  ? 'NULL'
-                  : value.toStringAsFixed(3);
+          // Add curve values with proper handling for arrays vs singles
+          // In frameData, all data for all frames is stored sequentially
+
+          // Calculate how much data each frame contains
+          int singleValuesPerFrame = 0;
+          int arrayElementsPerFrame = 0;
+
+          for (var datum in datumBlocks) {
+            if (dataFormatSpec.depthRecordingMode == 0 &&
+                datum.mnemonic == 'DEPT') {
+              continue; // Skip DEPT in depth-per-frame mode
+            }
+
+            if (datum.size <= 4) {
+              singleValuesPerFrame += 1;
             } else {
-              row[columnNames[col]] = 'NULL';
+              arrayElementsPerFrame += datum.dataItemNum;
+            }
+          }
+
+          int totalValuesPerFrame =
+              singleValuesPerFrame + arrayElementsPerFrame;
+          int frameDataStartIndex = frame * totalValuesPerFrame;
+
+          int currentIndex = frameDataStartIndex;
+
+          for (int col = 1; col < columnNames.length; col++) {
+            final columnName = columnNames[col];
+
+            // Find corresponding datum
+            final datum = datumBlocks.firstWhere(
+              (d) => d.mnemonic == columnName,
+              orElse: () => datumBlocks.first,
+            );
+
+            if (datum.size <= 4) {
+              // Single value datum
+              if (currentIndex < frameData.length) {
+                final value = frameData[currentIndex];
+                row[columnName] = value.isNaN
+                    ? 'NULL'
+                    : value.toStringAsFixed(3);
+                currentIndex += 1;
+              } else {
+                row[columnName] = 'NULL';
+              }
+            } else {
+              // Array datum - display "..." and store metadata for waveform viewing
+              row[columnName] = {
+                'display': '...',
+                'isArray': true,
+                'recordIdx': recordIdx,
+                'frameIdx': frame,
+                'datumName': columnName,
+              };
+              currentIndex += datum.dataItemNum;
             }
           }
 

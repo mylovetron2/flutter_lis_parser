@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../services/lis_file_parser.dart';
+import 'waveform_viewer_dialog.dart';
 
 class DataTableWidget extends StatefulWidget {
   final LisFileParser parser;
@@ -213,6 +214,61 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                     return DataRow(
                       cells: columnNames.map((columnName) {
                         final value = row[columnName] ?? 'N/A';
+
+                        // Check if this is an array value with metadata
+                        if (value is Map && value['isArray'] == true) {
+                          return DataCell(
+                            InkWell(
+                              onTap: () => _showWaveformDialog(
+                                context,
+                                value['datumName'],
+                                value['recordIdx'],
+                                value['frameIdx'],
+                                double.tryParse(
+                                      row['DEPTH']?.toString() ?? '0',
+                                    ) ??
+                                    0.0,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.primaryContainer,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '...',
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onPrimaryContainer,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.show_chart,
+                                      size: 16,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onPrimaryContainer,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+
+                        // Regular single value
                         return DataCell(
                           Text(
                             value.toString(),
@@ -244,6 +300,25 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       label: Text('$label: $value'),
       labelStyle: const TextStyle(fontSize: 12),
       visualDensity: VisualDensity.compact,
+    );
+  }
+
+  void _showWaveformDialog(
+    BuildContext context,
+    String datumName,
+    int recordIdx,
+    int frameIdx,
+    double depth,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => WaveformViewerDialog(
+        parser: widget.parser,
+        datumName: datumName,
+        recordIdx: recordIdx,
+        frameIdx: frameIdx,
+        depth: depth,
+      ),
     );
   }
 
