@@ -257,7 +257,11 @@ class _DataTableWidgetState extends State<DataTableWidget> {
     );
 
     try {
+      print('=== SAVE BUTTON CLICKED ===');
+      print('Number of pending changes: ${widget.parser.pendingChangesCount}');
+
       final success = await widget.parser.savePendingChanges();
+      print('Save result: $success');
 
       Navigator.of(context).pop(); // Close loading dialog
 

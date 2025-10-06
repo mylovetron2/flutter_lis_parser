@@ -1357,6 +1357,14 @@ class LisFileParser {
                   ? double.nan
                   : value;
 
+              // Debug ACHV values specifically
+              if (datum.mnemonic == 'ACHV' && frame == 0) {
+                print(
+                  'DEBUG READ: ACHV frame 0 raw value: $value, final: $finalValue at position $oldByteDataIdx',
+                );
+                print('DEBUG READ: entryBytes = $entryBytes');
+              }
+
               if (fileDataIdx < fileData.length) {
                 fileData[fileDataIdx++] = finalValue;
               }
@@ -1850,6 +1858,13 @@ class LisFileParser {
 
   // Method to save all pending changes to the actual LIS file
   Future<bool> savePendingChanges() async {
+    print('');
+    print('========================================');
+    print('SAVE PENDING CHANGES CALLED!');
+    print('File being saved: $fileName');
+    print('========================================');
+    print('Pending changes count: ${_pendingChanges.length}');
+
     if (_pendingChanges.isEmpty) {
       print('No pending changes to save');
       return true;
@@ -1857,68 +1872,105 @@ class LisFileParser {
 
     try {
       print('Saving ${_pendingChanges.length} pending changes to file...');
+      print('File name: $fileName');
 
       // Create a backup copy first
       final backupPath = '$fileName.backup';
       await File(fileName).copy(backupPath);
       print('Created backup file: $backupPath');
 
-      // Open file for read/write
-      final writeFile = await File(fileName).open(mode: FileMode.write);
-      final originalFile = await File(fileName).open(mode: FileMode.read);
+      // Read entire file into memory
+      final originalBytes = await File(fileName).readAsBytes();
+      final modifiedBytes = Uint8List.fromList(originalBytes);
 
-      try {
-        // Process each pending change
-        for (final entry in _pendingChanges.entries) {
-          final change = entry.value;
-          final recordIndex = change['recordIndex'] as int;
-          final frameIndex = change['frameIndex'] as int;
-          final newValue = change['newValue'] as double;
-          final datum = change['datum'] as DatumSpecBlock;
+      // Process each pending change
+      for (final entry in _pendingChanges.entries) {
+        final change = entry.value;
+        final actualRecordIndex = change['recordIndex'] as int;
+        final frameIndex = change['frameIndex'] as int;
+        final newValue = change['newValue'] as double;
+        final datum = change['datum'] as DatumSpecBlock;
 
-          // Calculate the byte position in the file
-          final success = await _writeValueToFile(
-            writeFile,
-            originalFile,
-            recordIndex,
-            frameIndex,
-            datum,
-            newValue,
-          );
+        // Calculate the byte position in the file and update in memory
+        final success = _updateBytesInMemory(
+          modifiedBytes,
+          actualRecordIndex,
+          frameIndex,
+          datum,
+          newValue,
+        );
 
-          if (!success) {
-            print('Failed to write change for ${entry.key}');
-            // Continue with other changes rather than failing completely
-          }
+        if (!success) {
+          print('Failed to update change for ${entry.key}');
+          // Continue with other changes rather than failing completely
         }
-
-        print('Successfully saved ${_pendingChanges.length} changes to file');
-        _pendingChanges.clear();
-        return true;
-      } finally {
-        await writeFile.close();
-        await originalFile.close();
       }
+
+      // Write the modified bytes back to file
+      final originalFileSize = await File(fileName).length();
+      print('Original file size: $originalFileSize bytes');
+      print('Modified bytes length: ${modifiedBytes.length} bytes');
+
+      // CRITICAL FIX: Close the file handle before writing to avoid conflicts
+      if (file != null) {
+        await file!.close();
+        print('DEBUG: Closed file handle before writing');
+      }
+
+      await File(fileName).writeAsBytes(modifiedBytes);
+      print('DEBUG: Written modified bytes to file');
+
+      // Re-open the file handle
+      file = await File(fileName).open(mode: FileMode.read);
+      print('DEBUG: Re-opened file handle after writing');
+
+      final newFileSize = await File(fileName).length();
+      print('New file size after write: $newFileSize bytes');
+
+      print('Successfully saved ${_pendingChanges.length} changes to file');
+      print('========================================');
+      print('SAVE COMPLETED SUCCESSFULLY!');
+      print('========================================');
+      print('');
+      _pendingChanges.clear();
+      return true;
     } catch (e) {
       print('Error saving changes to file: $e');
       return false;
     }
   }
 
-  // Helper method to write a single value to the file
-  Future<bool> _writeValueToFile(
-    RandomAccessFile writeFile,
-    RandomAccessFile originalFile,
-    int recordIndex,
+  // Helper method to update bytes in memory
+  bool _updateBytesInMemory(
+    Uint8List bytes,
+    int actualRecordIndex,
     int frameIndex,
     DatumSpecBlock datum,
     double newValue,
-  ) async {
+  ) {
     try {
-      // Find the LIS record
-      final lisRecord = lisRecords.firstWhere(
-        (r) => r.type == 0, // Data record
-        orElse: () => throw Exception('Data record not found'),
+      print(
+        'DEBUG: Updating bytes for record $actualRecordIndex, frame $frameIndex, datum ${datum.mnemonic}',
+      );
+
+      // Find the data records in order
+      final dataRecords = lisRecords.where((r) => r.type == 0).toList();
+      print(
+        'DEBUG: Found ${dataRecords.length} data records, startDataRec=$startDataRec',
+      );
+
+      // Calculate which data record this change belongs to
+      final dataRecordIndex = actualRecordIndex - startDataRec;
+      if (dataRecordIndex < 0 || dataRecordIndex >= dataRecords.length) {
+        print(
+          'Data record index out of bounds: $dataRecordIndex (range: 0-${dataRecords.length - 1})',
+        );
+        return false;
+      }
+
+      final lisRecord = dataRecords[dataRecordIndex];
+      print(
+        'DEBUG: Using data record at index $dataRecordIndex, addr=${lisRecord.addr}',
       );
 
       // Calculate byte position within the record
@@ -1931,52 +1983,150 @@ class LisFileParser {
         // NTI format
         byteOffset = 6; // Skip header
       }
+      print('DEBUG: Initial byteOffset=$byteOffset (after header)');
 
-      // Add frame offset
+      // Add frame offset - BUT we need to use the ACTUAL frame size from data
+      // Not the theoretical frameSize from spec
       final frameSize = dataFormatSpec.dataFrameSize;
       byteOffset += frameIndex * frameSize;
+      print(
+        'DEBUG: After frame offset: byteOffset=$byteOffset (frameIndex=$frameIndex, frameSize=$frameSize)',
+      );
 
-      // Add datum offset within frame
-      for (final d in datumBlocks) {
+      // Add datum offset within frame - match EXACT parsing logic
+      print('DEBUG: depthRecordingMode=${dataFormatSpec.depthRecordingMode}');
+      int datumOffset = 0;
+
+      // CRITICAL: In parsing, byteDataIdx starts at 4 (after depth),
+      // but ACHV is at 2068. The difference means DEPT IS included in offset calculation.
+      // So we need to add 4 bytes to match parsing position.
+
+      for (int i = 0; i < datumBlocks.length; i++) {
+        final d = datumBlocks[i];
+
+        print(
+          'DEBUG: Processing datum $i: ${d.mnemonic}, size=${d.size}, looking for ${datum.mnemonic}',
+        );
+
         if (d.mnemonic == datum.mnemonic) {
-          break;
+          print(
+            'DEBUG: Found target datum ${datum.mnemonic} at index $i, datumOffset=$datumOffset',
+          );
+          break; // Found our target datum
         }
-        byteOffset += d.size;
+
+        // Add size for each datum before target (including DEPT)
+        datumOffset += d.size;
+        print('DEBUG: Added ${d.size} to datumOffset, now $datumOffset');
       }
+
+      // CRITICAL FIX: Add 4 bytes to match parsing offset
+      // In parsing: ACHV at 2068, in save: ACHV calculated at 2064
+      // Need to add 4 bytes difference
+      datumOffset += 4;
+      print('DEBUG: Added 4 bytes correction, final datumOffset=$datumOffset');
+
+      byteOffset += datumOffset;
+      print(
+        'DEBUG: After datum offset: byteOffset=$byteOffset (datumOffset=$datumOffset)',
+      );
 
       // Calculate absolute file position
       final filePosition = lisRecord.addr + byteOffset;
+      print(
+        'DEBUG: Final file position=$filePosition (record.addr=${lisRecord.addr} + byteOffset=$byteOffset)',
+      );
+
+      // Validate position
+      if (filePosition + datum.size > bytes.length) {
+        print(
+          'Position out of bounds: ${filePosition + datum.size} > ${bytes.length}',
+        );
+        return false;
+      }
 
       // Convert new value to bytes based on representation code
       final valueBytes = _encodeValue(newValue, datum.reprCode, datum.size);
+      print(
+        'DEBUG: Encoded value $newValue (reprCode=${datum.reprCode}) to ${valueBytes.length} bytes: ${valueBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
 
-      // Copy original file to write file up to the change position
-      await originalFile.setPosition(0);
-      await writeFile.setPosition(0);
+      // Read current bytes at this position for comparison
+      final currentBytes = bytes.sublist(
+        filePosition,
+        filePosition + datum.size,
+      );
+      print(
+        'DEBUG: Current bytes at position $filePosition: ${currentBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
 
-      // Copy data before our change
-      if (filePosition > 0) {
-        final beforeData = await originalFile.read(filePosition);
-        await writeFile.writeFrom(beforeData);
+      // VERIFICATION: Let's also check what we would read at the same position
+      // to verify our calculation is correct
+      final verificationValue = _decodeValue(currentBytes, datum.reprCode);
+      print(
+        'DEBUG: Current value decoded at position $filePosition: $verificationValue',
+      );
+
+      // Update bytes in memory
+      for (int i = 0; i < valueBytes.length && i < datum.size; i++) {
+        bytes[filePosition + i] = valueBytes[i];
       }
 
-      // Write our new value
-      await writeFile.writeFrom(valueBytes);
-
-      // Skip the old value in original file
-      await originalFile.setPosition(filePosition + datum.size);
-
-      // Copy remaining data
-      final remainingData = await originalFile.read(
-        await originalFile.length() - await originalFile.position(),
+      // Verify the write
+      final writtenBytes = bytes.sublist(
+        filePosition,
+        filePosition + datum.size,
       );
-      await writeFile.writeFrom(remainingData);
+      print(
+        'DEBUG: Written bytes at position $filePosition: ${writtenBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
 
-      print('Successfully wrote value $newValue at position $filePosition');
+      // Verify the decoded value
+      final verificationAfterWrite = _decodeValue(writtenBytes, datum.reprCode);
+      print('DEBUG: New value decoded after write: $verificationAfterWrite');
+
+      print('Updated value $newValue at position $filePosition');
       return true;
     } catch (e) {
-      print('Error writing value to file: $e');
+      print('Error updating bytes in memory: $e');
       return false;
+    }
+  }
+
+  // Helper method to decode a value from bytes for verification
+  double _decodeValue(Uint8List bytes, int reprCode) {
+    try {
+      switch (reprCode) {
+        case 68: // 4-byte float - Try different approaches
+          // Try CodeReader first
+          try {
+            return CodeReader.readCode(bytes, reprCode, bytes.length);
+          } catch (e) {
+            print('CodeReader failed, trying ByteData: $e');
+            // Fallback to ByteData with big endian
+            final buffer = ByteData.sublistView(bytes);
+            return buffer.getFloat32(0, Endian.big);
+          }
+
+        case 73: // 4-byte int
+          return CodeReader.readCode(bytes, reprCode, bytes.length);
+
+        case 70: // 4-byte float (IBM format)
+          return CodeReader.readCode(bytes, reprCode, bytes.length);
+
+        case 49: // 2-byte float
+          return CodeReader.readCode(bytes, reprCode, bytes.length);
+
+        case 79: // 2-byte int
+          return CodeReader.readCode(bytes, reprCode, bytes.length);
+
+        default:
+          print('Unsupported representation code for decoding: $reprCode');
+          return 0.0;
+      }
+    } catch (e) {
+      print('Error decoding value: $e');
+      return 0.0;
     }
   }
 
@@ -1984,10 +2134,8 @@ class LisFileParser {
   Uint8List _encodeValue(double value, int reprCode, int size) {
     try {
       switch (reprCode) {
-        case 68: // 4-byte float
-          final buffer = ByteData(4);
-          buffer.setFloat32(0, value, Endian.little);
-          return buffer.buffer.asUint8List();
+        case 68: // 4-byte float - Use custom encoding to match CodeReader format
+          return _encodeRussianLisFloat(value);
 
         case 73: // 4-byte int
           final buffer = ByteData(4);
@@ -2016,6 +2164,110 @@ class LisFileParser {
     } catch (e) {
       print('Error encoding value: $e');
       return Uint8List(size); // Return zeros on error
+    }
+  }
+
+  // Russian LIS Float Encoder (reprCode 68) - Exact reverse of C++ ReadCode
+  Uint8List _encodeRussianLisFloat(double value) {
+    try {
+      print('DEBUG ENCODE: input value=$value');
+
+      if (value == 0.0) {
+        final result = Uint8List.fromList([0, 0, 0, 0]);
+        print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
+        return result;
+      }
+
+      bool isNegative = value < 0;
+      double absValue = value.abs();
+
+      // Find exponent and fraction to recreate the C++ ReadCode logic
+      // C++ positive: lExponent = pow(2, ntemp-128), fResult = fFraction * lExponent
+      // C++ negative: lExponent = pow(2, 127-ntemp), fResult = (-1) * fFraction * lExponent
+
+      double targetFraction;
+      int exponentBits;
+
+      if (isNegative) {
+        // For negative: find ntemp such that absValue = fFraction * pow(2, 127-ntemp)
+        // Rearrange: ntemp = 127 - log2(absValue/fFraction)
+        // Assume fFraction around 0.5-1.0 range
+        targetFraction = absValue;
+        exponentBits = 127;
+
+        // Normalize fraction to [0.5, 1.0) range
+        while (targetFraction >= 1.0) {
+          targetFraction /= 2.0;
+          exponentBits--;
+        }
+        while (targetFraction < 0.5) {
+          targetFraction *= 2.0;
+          exponentBits++;
+        }
+      } else {
+        // For positive: find ntemp such that absValue = fFraction * pow(2, ntemp-128)
+        // Rearrange: ntemp = 128 + log2(absValue/fFraction)
+        targetFraction = absValue;
+        exponentBits = 128;
+
+        // Normalize fraction to [0.5, 1.0) range
+        while (targetFraction >= 1.0) {
+          targetFraction /= 2.0;
+          exponentBits++;
+        }
+        while (targetFraction < 0.5) {
+          targetFraction *= 2.0;
+          exponentBits--;
+        }
+      }
+
+      // Clamp exponent to valid range
+      exponentBits = exponentBits.clamp(0, 255);
+
+      // Convert fraction to 23-bit mantissa using C++ algorithm
+      // C++ uses: fFactor=0.5, checks if(ntemp>=0x80000000), fFraction+=fFactor, fFactor/=2
+      int mantissaBits = 0;
+      double remainingFraction = targetFraction;
+      double bitValue = 0.5;
+
+      for (int i = 22; i >= 0; i--) {
+        // MSB first
+        if (remainingFraction >= bitValue) {
+          mantissaBits |= (1 << i);
+          remainingFraction -= bitValue;
+        }
+        bitValue /= 2.0;
+      }
+
+      // Handle negative numbers - C++ does complement operation
+      if (isNegative) {
+        // C++ negative: ntemp=~ntemp; ntemp=ntemp+1;
+        mantissaBits = (~mantissaBits + 1) & 0x7FFFFF;
+      }
+
+      // Assemble the 32-bit result
+      int result = 0;
+      if (isNegative) {
+        result |= 0x80000000; // Sign bit
+      }
+      result |= (exponentBits << 23); // Exponent (8 bits)
+      result |= mantissaBits; // Mantissa (23 bits)
+
+      // Extract bytes in big-endian order
+      int ch0 = (result >> 24) & 0xFF;
+      int ch1 = (result >> 16) & 0xFF;
+      int ch2 = (result >> 8) & 0xFF;
+      int ch3 = result & 0xFF;
+
+      final encoded = Uint8List.fromList([ch0, ch1, ch2, ch3]);
+      print(
+        'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
+      );
+
+      return encoded;
+    } catch (e) {
+      print('Error encoding Russian LIS float: $e');
+      return Uint8List.fromList([0, 0, 0, 0]);
     }
   }
 }
