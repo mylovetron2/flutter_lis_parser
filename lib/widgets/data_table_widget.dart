@@ -21,11 +21,26 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   int maxRows = 500; // Limit rows for performance
   int currentPage = 0;
   final int rowsPerPage = 50;
+  
+  // Editing state
+  String? editingCellKey; // Format: "rowIndex_columnName"
+  Map<String, TextEditingController> editControllers = {};
+  Map<String, String> modifiedValues = {}; // Track modified values
+  bool isEditMode = false;
 
   @override
   void initState() {
     super.initState();
     _loadTableData();
+  }
+
+  @override
+  void dispose() {
+    // Clean up text controllers
+    for (var controller in editControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _loadTableData() async {
@@ -94,6 +109,111 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
   int get totalPages => (tableData.length / rowsPerPage).ceil();
 
+  void _startEditing(int rowIndex, String columnName, String currentValue) {
+    final cellKey = '${rowIndex}_$columnName';
+    
+    // Don't edit array values or DEPTH column
+    if (columnName == 'DEPTH') return;
+    
+    setState(() {
+      editingCellKey = cellKey;
+      isEditMode = true;
+    });
+    
+    // Create or get controller for this cell
+    if (!editControllers.containsKey(cellKey)) {
+      editControllers[cellKey] = TextEditingController(text: currentValue);
+    } else {
+      editControllers[cellKey]!.text = currentValue;
+    }
+  }
+
+  void _saveEdit(int rowIndex, String columnName) {
+    final cellKey = '${rowIndex}_$columnName';
+    final controller = editControllers[cellKey];
+    
+    if (controller != null) {
+      final newValue = controller.text.trim();
+      
+      // Validate numeric value
+      if (_isValidNumericValue(newValue)) {
+        // Update the table data
+        final actualRowIndex = currentPage * rowsPerPage + rowIndex;
+        if (actualRowIndex < tableData.length) {
+          setState(() {
+            tableData[actualRowIndex][columnName] = newValue;
+            modifiedValues[cellKey] = newValue;
+            editingCellKey = null;
+            isEditMode = false;
+          });
+          
+          // Show success message
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Updated $columnName value to $newValue'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        // Show error message
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid numeric value. Please enter a valid number.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  void _cancelEdit() {
+    setState(() {
+      editingCellKey = null;
+      isEditMode = false;
+    });
+  }
+
+  bool _isValidNumericValue(String value) {
+    if (value.isEmpty) return false;
+    return double.tryParse(value) != null;
+  }
+
+  bool _isCellModified(int rowIndex, String columnName) {
+    final cellKey = '${rowIndex}_$columnName';
+    return modifiedValues.containsKey(cellKey);
+  }
+
+  void _resetAllChanges() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reset Changes'),
+        content: Text('Are you sure you want to reset all ${modifiedValues.length} changes?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              setState(() {
+                modifiedValues.clear();
+                editingCellKey = null;
+                isEditMode = false;
+              });
+              Navigator.of(context).pop();
+              _loadTableData(); // Reload original data
+            },
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -157,6 +277,40 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const Spacer(),
+                    // Edit mode controls
+                    if (modifiedValues.isNotEmpty) ...[
+                      Chip(
+                        label: Text('${modifiedValues.length} modified'),
+                        backgroundColor: Colors.orange.withOpacity(0.2),
+                        side: BorderSide(color: Colors.orange),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: _resetAllChanges,
+                        icon: const Icon(Icons.undo),
+                        tooltip: 'Reset all changes',
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    // Edit mode toggle
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          isEditMode = !isEditMode;
+                          if (!isEditMode) {
+                            editingCellKey = null;
+                          }
+                        });
+                      },
+                      icon: Icon(isEditMode ? Icons.edit_off : Icons.edit),
+                      tooltip: isEditMode ? 'Exit edit mode' : 'Enable edit mode',
+                      style: IconButton.styleFrom(
+                        backgroundColor: isEditMode 
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : null,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Chip(
                       label: Text('${tableData.length} rows'),
                       backgroundColor: Theme.of(
@@ -210,10 +364,16 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                       ),
                     );
                   }).toList(),
-                  rows: currentPageData.map((row) {
+                  rows: currentPageData.asMap().entries.map((entry) {
+                    final rowIndex = entry.key;
+                    final row = entry.value;
+                    
                     return DataRow(
                       cells: columnNames.map((columnName) {
                         final value = row[columnName] ?? 'N/A';
+                        final cellKey = '${rowIndex}_$columnName';
+                        final isEditing = editingCellKey == cellKey;
+                        final isModified = _isCellModified(rowIndex, columnName);
 
                         // Check if this is an array value with metadata
                         if (value is Map && value['isArray'] == true) {
@@ -268,15 +428,101 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                           );
                         }
 
-                        // Regular single value
+                        // Regular single value - with editing support
+                        final canEdit = isEditMode && 
+                                      columnName != 'DEPTH' && 
+                                      value != 'NULL' && 
+                                      value != 'N/A';
+
+                        if (isEditing) {
+                          // Show TextField for editing
+                          return DataCell(
+                            Container(
+                              width: 120,
+                              child: TextField(
+                                controller: editControllers[cellKey],
+                                autofocus: true,
+                                style: const TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 14,
+                                ),
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.all(8),
+                                  border: OutlineInputBorder(),
+                                  suffixIcon: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        onPressed: () => _saveEdit(rowIndex, columnName),
+                                        icon: Icon(Icons.check, size: 16, color: Colors.green),
+                                        padding: EdgeInsets.zero,
+                                        constraints: BoxConstraints(minWidth: 24, minHeight: 24),
+                                      ),
+                                      IconButton(
+                                        onPressed: _cancelEdit,
+                                        icon: Icon(Icons.close, size: 16, color: Colors.red),
+                                        padding: EdgeInsets.zero,
+                                        constraints: BoxConstraints(minWidth: 24, minHeight: 24),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                onSubmitted: (_) => _saveEdit(rowIndex, columnName),
+                              ),
+                            ),
+                          );
+                        }
+
+                        // Normal display mode
                         return DataCell(
-                          Text(
-                            value.toString(),
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              color: value == 'NULL' || value == 'N/A'
-                                  ? Theme.of(context).colorScheme.outline
-                                  : null,
+                          InkWell(
+                            onTap: canEdit ? () => _startEditing(rowIndex, columnName, value.toString()) : null,
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                              decoration: BoxDecoration(
+                                color: isModified 
+                                  ? Colors.orange.withOpacity(0.1)
+                                  : canEdit 
+                                    ? Theme.of(context).colorScheme.surfaceContainer.withOpacity(0.5)
+                                    : null,
+                                borderRadius: BorderRadius.circular(4),
+                                border: canEdit ? Border.all(
+                                  color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+                                  width: 1,
+                                ) : null,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      value.toString(),
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        color: value == 'NULL' || value == 'N/A'
+                                            ? Theme.of(context).colorScheme.outline
+                                            : isModified
+                                              ? Colors.orange.shade800
+                                              : null,
+                                        fontWeight: isModified ? FontWeight.bold : null,
+                                      ),
+                                    ),
+                                  ),
+                                  if (canEdit) 
+                                    Icon(
+                                      Icons.edit,
+                                      size: 12,
+                                      color: Theme.of(context).colorScheme.outline,
+                                    ),
+                                  if (isModified)
+                                    Icon(
+                                      Icons.circle,
+                                      size: 8,
+                                      color: Colors.orange,
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                         );
@@ -291,6 +537,32 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
         // Bottom pagination
         if (totalPages > 1) _buildPaginationControls(),
+        
+        // Help text for editing
+        if (isEditMode)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Edit mode enabled: Click on any numeric cell to edit. DEPTH column is read-only.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }

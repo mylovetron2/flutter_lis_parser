@@ -375,11 +375,17 @@ class _ChartScreenState extends State<ChartScreen> {
           child: Row(
             children: [
               Expanded(
-                child: _buildTrackCurveList('Frame Index Track', chartConfig.timeTrack),
+                child: _buildTrackCurveList(
+                  'Frame Index Track',
+                  chartConfig.timeTrack,
+                ),
               ),
               const VerticalDivider(),
               Expanded(
-                child: _buildTrackCurveList('Depth Track', chartConfig.depthTrack),
+                child: _buildTrackCurveList(
+                  'Depth Track',
+                  chartConfig.depthTrack,
+                ),
               ),
             ],
           ),
@@ -396,9 +402,9 @@ class _ChartScreenState extends State<ChartScreen> {
           padding: const EdgeInsets.all(8.0),
           child: Text(
             trackName,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
         ),
         Expanded(
@@ -484,12 +490,13 @@ class _ChartScreenState extends State<ChartScreen> {
           Expanded(
             child: SfCartesianChart(
               primaryXAxis: NumericAxis(
-                title: AxisTitle(text: track.axisLabel),
+                title: AxisTitle(text: 'Value'),
                 enableAutoIntervalOnZooming: true,
               ),
               primaryYAxis: NumericAxis(
-                title: AxisTitle(text: 'Value'),
+                title: AxisTitle(text: track.axisLabel),
                 enableAutoIntervalOnZooming: true,
+                isInversed: true, // Đảo ngược trục Y để giá trị tăng từ trên xuống
               ),
               zoomPanBehavior: ZoomPanBehavior(
                 enablePinching: true,
@@ -520,9 +527,9 @@ class _ChartScreenState extends State<ChartScreen> {
     return LineSeries<chart_data.LisChartPoint, double>(
       name: curve.name,
       dataSource: curve.dataPoints,
-      xValueMapper: (chart_data.LisChartPoint point, _) =>
-          isTimeTrack ? point.x : (point.depth ?? 0),
-      yValueMapper: (chart_data.LisChartPoint point, _) => point.y,
+      xValueMapper: (chart_data.LisChartPoint point, _) => point.y, // Values as X
+      yValueMapper: (chart_data.LisChartPoint point, _) => 
+          isTimeTrack ? point.x : (point.depth ?? 0), // Frame Index or Depth as Y
       color: curve.color,
       width: curve.lineWidth,
       enableTooltip: true,
