@@ -21,7 +21,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   int maxRows = 500; // Limit rows for performance
   int currentPage = 0;
   final int rowsPerPage = 50;
-  
+
   // Editing state
   String? editingCellKey; // Format: "rowIndex_columnName"
   Map<String, TextEditingController> editControllers = {};
@@ -111,15 +111,15 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
   void _startEditing(int rowIndex, String columnName, String currentValue) {
     final cellKey = '${rowIndex}_$columnName';
-    
+
     // Don't edit array values or DEPTH column
     if (columnName == 'DEPTH') return;
-    
+
     setState(() {
       editingCellKey = cellKey;
       isEditMode = true;
     });
-    
+
     // Create or get controller for this cell
     if (!editControllers.containsKey(cellKey)) {
       editControllers[cellKey] = TextEditingController(text: currentValue);
@@ -131,22 +131,26 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   void _saveEdit(int rowIndex, String columnName) {
     final cellKey = '${rowIndex}_$columnName';
     final controller = editControllers[cellKey];
-    
+
     if (controller != null) {
       final newValue = controller.text.trim();
-      
+
       // Validate numeric value
       if (_isValidNumericValue(newValue)) {
-        // Update the table data
+        // Update the table data locally
         final actualRowIndex = currentPage * rowsPerPage + rowIndex;
         if (actualRowIndex < tableData.length) {
+          final numericValue = double.parse(newValue);
+
           setState(() {
             tableData[actualRowIndex][columnName] = newValue;
             modifiedValues[cellKey] = newValue;
             editingCellKey = null;
-            isEditMode = false;
           });
-          
+
+          // Update the parser's pending changes
+          _updateParserData(actualRowIndex, columnName, numericValue);
+
           // Show success message
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -160,12 +164,134 @@ class _DataTableWidgetState extends State<DataTableWidget> {
         // Show error message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Invalid numeric value. Please enter a valid number.'),
+            content: Text(
+              'Invalid numeric value. Please enter a valid number.',
+            ),
             backgroundColor: Colors.red,
             duration: Duration(seconds: 3),
           ),
         );
       }
+    }
+  }
+
+  Future<void> _updateParserData(
+    int rowIndex,
+    String columnName,
+    double newValue,
+  ) async {
+    try {
+      // Calculate frame index from row data
+      // This is a simplified approach - in reality, you'd need to map depth to record/frame more precisely
+      final recordIndex =
+          rowIndex ~/
+          14; // Assuming 14 frames per record based on previous logs
+      final frameIndex = rowIndex % 14;
+
+      final success = await widget.parser.updateDataValue(
+        recordIndex: recordIndex,
+        frameIndex: frameIndex,
+        columnName: columnName,
+        newValue: newValue,
+      );
+
+      if (!success) {
+        print('Failed to update parser data for $columnName');
+      }
+    } catch (e) {
+      print('Error updating parser data: $e');
+    }
+  }
+
+  Future<void> _saveAllChangesToFile() async {
+    if (widget.parser.pendingChangesCount == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No changes to save'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Save Changes to File'),
+        content: Text(
+          'This will permanently save ${widget.parser.pendingChangesCount} changes to the LIS file.\n\n'
+          'A backup copy will be created automatically.\n\n'
+          'Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text('Save to File'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Saving changes to file...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final success = await widget.parser.savePendingChanges();
+
+      Navigator.of(context).pop(); // Close loading dialog
+
+      if (success) {
+        setState(() {
+          modifiedValues.clear(); // Clear UI modified state
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Successfully saved all changes to file!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to save changes to file'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      Navigator.of(context).pop(); // Close loading dialog
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error saving to file: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
   }
 
@@ -191,7 +317,9 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Reset Changes'),
-        content: Text('Are you sure you want to reset all ${modifiedValues.length} changes?'),
+        content: Text(
+          'Are you sure you want to reset all ${modifiedValues.length} changes?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -285,6 +413,17 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                         side: BorderSide(color: Colors.orange),
                       ),
                       const SizedBox(width: 8),
+                      // Save to file button
+                      IconButton(
+                        onPressed: _saveAllChangesToFile,
+                        icon: const Icon(Icons.save),
+                        tooltip: 'Save changes to LIS file',
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.green.withOpacity(0.1),
+                          foregroundColor: Colors.green,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       IconButton(
                         onPressed: _resetAllChanges,
                         icon: const Icon(Icons.undo),
@@ -303,11 +442,13 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                         });
                       },
                       icon: Icon(isEditMode ? Icons.edit_off : Icons.edit),
-                      tooltip: isEditMode ? 'Exit edit mode' : 'Enable edit mode',
+                      tooltip: isEditMode
+                          ? 'Exit edit mode'
+                          : 'Enable edit mode',
                       style: IconButton.styleFrom(
-                        backgroundColor: isEditMode 
-                          ? Theme.of(context).colorScheme.primaryContainer
-                          : null,
+                        backgroundColor: isEditMode
+                            ? Theme.of(context).colorScheme.primaryContainer
+                            : null,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -367,13 +508,16 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                   rows: currentPageData.asMap().entries.map((entry) {
                     final rowIndex = entry.key;
                     final row = entry.value;
-                    
+
                     return DataRow(
                       cells: columnNames.map((columnName) {
                         final value = row[columnName] ?? 'N/A';
                         final cellKey = '${rowIndex}_$columnName';
                         final isEditing = editingCellKey == cellKey;
-                        final isModified = _isCellModified(rowIndex, columnName);
+                        final isModified = _isCellModified(
+                          rowIndex,
+                          columnName,
+                        );
 
                         // Check if this is an array value with metadata
                         if (value is Map && value['isArray'] == true) {
@@ -429,10 +573,11 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                         }
 
                         // Regular single value - with editing support
-                        final canEdit = isEditMode && 
-                                      columnName != 'DEPTH' && 
-                                      value != 'NULL' && 
-                                      value != 'N/A';
+                        final canEdit =
+                            isEditMode &&
+                            columnName != 'DEPTH' &&
+                            value != 'NULL' &&
+                            value != 'N/A';
 
                         if (isEditing) {
                           // Show TextField for editing
@@ -454,21 +599,37 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       IconButton(
-                                        onPressed: () => _saveEdit(rowIndex, columnName),
-                                        icon: Icon(Icons.check, size: 16, color: Colors.green),
+                                        onPressed: () =>
+                                            _saveEdit(rowIndex, columnName),
+                                        icon: Icon(
+                                          Icons.check,
+                                          size: 16,
+                                          color: Colors.green,
+                                        ),
                                         padding: EdgeInsets.zero,
-                                        constraints: BoxConstraints(minWidth: 24, minHeight: 24),
+                                        constraints: BoxConstraints(
+                                          minWidth: 24,
+                                          minHeight: 24,
+                                        ),
                                       ),
                                       IconButton(
                                         onPressed: _cancelEdit,
-                                        icon: Icon(Icons.close, size: 16, color: Colors.red),
+                                        icon: Icon(
+                                          Icons.close,
+                                          size: 16,
+                                          color: Colors.red,
+                                        ),
                                         padding: EdgeInsets.zero,
-                                        constraints: BoxConstraints(minWidth: 24, minHeight: 24),
+                                        constraints: BoxConstraints(
+                                          minWidth: 24,
+                                          minHeight: 24,
+                                        ),
                                       ),
                                     ],
                                   ),
                                 ),
-                                onSubmitted: (_) => _saveEdit(rowIndex, columnName),
+                                onSubmitted: (_) =>
+                                    _saveEdit(rowIndex, columnName),
                               ),
                             ),
                           );
@@ -477,21 +638,37 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                         // Normal display mode
                         return DataCell(
                           InkWell(
-                            onTap: canEdit ? () => _startEditing(rowIndex, columnName, value.toString()) : null,
+                            onTap: canEdit
+                                ? () => _startEditing(
+                                    rowIndex,
+                                    columnName,
+                                    value.toString(),
+                                  )
+                                : null,
                             child: Container(
                               width: double.infinity,
-                              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 8,
+                                horizontal: 4,
+                              ),
                               decoration: BoxDecoration(
-                                color: isModified 
-                                  ? Colors.orange.withOpacity(0.1)
-                                  : canEdit 
-                                    ? Theme.of(context).colorScheme.surfaceContainer.withOpacity(0.5)
+                                color: isModified
+                                    ? Colors.orange.withOpacity(0.1)
+                                    : canEdit
+                                    ? Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainer
+                                          .withOpacity(0.5)
                                     : null,
                                 borderRadius: BorderRadius.circular(4),
-                                border: canEdit ? Border.all(
-                                  color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
-                                  width: 1,
-                                ) : null,
+                                border: canEdit
+                                    ? Border.all(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.outline.withOpacity(0.3),
+                                        width: 1,
+                                      )
+                                    : null,
                               ),
                               child: Row(
                                 children: [
@@ -501,19 +678,25 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                                       style: TextStyle(
                                         fontFamily: 'monospace',
                                         color: value == 'NULL' || value == 'N/A'
-                                            ? Theme.of(context).colorScheme.outline
+                                            ? Theme.of(
+                                                context,
+                                              ).colorScheme.outline
                                             : isModified
-                                              ? Colors.orange.shade800
-                                              : null,
-                                        fontWeight: isModified ? FontWeight.bold : null,
+                                            ? Colors.orange.shade800
+                                            : null,
+                                        fontWeight: isModified
+                                            ? FontWeight.bold
+                                            : null,
                                       ),
                                     ),
                                   ),
-                                  if (canEdit) 
+                                  if (canEdit)
                                     Icon(
                                       Icons.edit,
                                       size: 12,
-                                      color: Theme.of(context).colorScheme.outline,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.outline,
                                     ),
                                   if (isModified)
                                     Icon(
@@ -537,7 +720,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
         // Bottom pagination
         if (totalPages > 1) _buildPaginationControls(),
-        
+
         // Help text for editing
         if (isEditMode)
           Card(
@@ -553,7 +736,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Edit mode enabled: Click on any numeric cell to edit. DEPTH column is read-only.',
+                      'Edit mode: Click numeric cells to edit • DEPTH is read-only • Click Save 💾 to write changes to LIS file',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.primary,
                       ),

@@ -369,7 +369,7 @@ class _ChartScreenState extends State<ChartScreen> {
       children: [
         Container(
           padding: const EdgeInsets.all(16),
-          child: Text('Curves', style: Theme.of(context).textTheme.titleMedium),
+          child: Text('', style: Theme.of(context).textTheme.titleMedium),
         ),
         Expanded(
           child: Row(
@@ -496,7 +496,8 @@ class _ChartScreenState extends State<ChartScreen> {
               primaryYAxis: NumericAxis(
                 title: AxisTitle(text: track.axisLabel),
                 enableAutoIntervalOnZooming: true,
-                isInversed: true, // Đảo ngược trục Y để giá trị tăng từ trên xuống
+                isInversed:
+                    true, // Đảo ngược trục Y để giá trị tăng từ trên xuống
               ),
               zoomPanBehavior: ZoomPanBehavior(
                 enablePinching: true,
@@ -527,9 +528,11 @@ class _ChartScreenState extends State<ChartScreen> {
     return LineSeries<chart_data.LisChartPoint, double>(
       name: curve.name,
       dataSource: curve.dataPoints,
-      xValueMapper: (chart_data.LisChartPoint point, _) => point.y, // Values as X
-      yValueMapper: (chart_data.LisChartPoint point, _) => 
-          isTimeTrack ? point.x : (point.depth ?? 0), // Frame Index or Depth as Y
+      xValueMapper: (chart_data.LisChartPoint point, _) =>
+          point.y, // Values as X
+      yValueMapper: (chart_data.LisChartPoint point, _) => isTimeTrack
+          ? point.x
+          : (point.depth ?? 0), // Frame Index or Depth as Y
       color: curve.color,
       width: curve.lineWidth,
       enableTooltip: true,

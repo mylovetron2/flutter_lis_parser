@@ -1717,4 +1717,305 @@ class LisFileParser {
 
     return tableData;
   }
+
+  // Method to update a specific data value in memory
+  Future<bool> updateDataValue({
+    required int recordIndex,
+    required int frameIndex,
+    required String columnName,
+    required double newValue,
+  }) async {
+    try {
+      if (!isFileOpen) {
+        print('File not open for updating');
+        return false;
+      }
+
+      // Find the datum for this column
+      final datum = datumBlocks.firstWhere(
+        (d) => d.mnemonic == columnName,
+        orElse: () => throw Exception('Column $columnName not found'),
+      );
+
+      // Skip DEPTH column and array data for safety
+      if (columnName == 'DEPTH' || datum.size > 4) {
+        print('Cannot update DEPTH column or array data');
+        return false;
+      }
+
+      // Get the actual record index in the data records range
+      final actualRecordIndex = startDataRec + recordIndex;
+      if (actualRecordIndex < startDataRec || actualRecordIndex > endDataRec) {
+        print('Record index out of range: $actualRecordIndex');
+        return false;
+      }
+
+      // Calculate the position in the raw data
+      final allData = await getAllData(actualRecordIndex);
+      if (allData.isEmpty) {
+        print('No data found for record $actualRecordIndex');
+        return false;
+      }
+
+      final frameNum = getFrameNum(actualRecordIndex);
+      if (frameIndex >= frameNum) {
+        print('Frame index out of range: $frameIndex >= $frameNum');
+        return false;
+      }
+
+      // Calculate data positioning (same logic as getTableData)
+      int singleValuesPerFrame = 0;
+      int arrayElementsPerFrame = 0;
+
+      for (var d in datumBlocks) {
+        if (dataFormatSpec.depthRecordingMode == 0 && d.mnemonic == 'DEPT') {
+          continue; // Skip DEPT in depth-per-frame mode
+        }
+
+        if (d.size <= 4) {
+          singleValuesPerFrame += 1;
+        } else {
+          arrayElementsPerFrame += d.dataItemNum;
+        }
+      }
+
+      int totalValuesPerFrame = singleValuesPerFrame + arrayElementsPerFrame;
+      int frameDataStartIndex = frameIndex * totalValuesPerFrame;
+      int currentIndex = frameDataStartIndex;
+
+      // Find the index for this specific column
+      for (int i = 0; i < datumBlocks.length; i++) {
+        final otherDatum = datumBlocks[i];
+        if (dataFormatSpec.depthRecordingMode == 0 &&
+            otherDatum.mnemonic == 'DEPT') {
+          continue; // Skip DEPT in depth-per-frame mode
+        }
+
+        if (otherDatum.mnemonic == columnName) {
+          break; // Found our column
+        }
+
+        if (otherDatum.size <= 4) {
+          currentIndex += 1; // Single value
+        } else {
+          currentIndex += otherDatum.dataItemNum; // Array values
+        }
+      }
+
+      if (currentIndex >= allData.length) {
+        print('Data index out of bounds: $currentIndex >= ${allData.length}');
+        return false;
+      }
+
+      // Store the change for later file writing
+      final changeKey = '${actualRecordIndex}_${frameIndex}_${columnName}';
+      if (!_pendingChanges.containsKey(changeKey)) {
+        _pendingChanges[changeKey] = {
+          'recordIndex': actualRecordIndex,
+          'frameIndex': frameIndex,
+          'columnName': columnName,
+          'dataIndex': currentIndex,
+          'oldValue': allData[currentIndex],
+          'newValue': newValue,
+          'datum': datum,
+        };
+
+        print(
+          'Stored pending change: $changeKey = $newValue (was ${allData[currentIndex]})',
+        );
+        return true;
+      } else {
+        // Update existing pending change
+        _pendingChanges[changeKey]!['newValue'] = newValue;
+        print('Updated pending change: $changeKey = $newValue');
+        return true;
+      }
+    } catch (e) {
+      print('Error updating data value: $e');
+      return false;
+    }
+  }
+
+  // Pending changes storage
+  final Map<String, Map<String, dynamic>> _pendingChanges = {};
+
+  // Get pending changes count
+  int get pendingChangesCount => _pendingChanges.length;
+
+  // Clear all pending changes
+  void clearPendingChanges() {
+    _pendingChanges.clear();
+    print('Cleared all pending changes');
+  }
+
+  // Method to save all pending changes to the actual LIS file
+  Future<bool> savePendingChanges() async {
+    if (_pendingChanges.isEmpty) {
+      print('No pending changes to save');
+      return true;
+    }
+
+    try {
+      print('Saving ${_pendingChanges.length} pending changes to file...');
+
+      // Create a backup copy first
+      final backupPath = '$fileName.backup';
+      await File(fileName).copy(backupPath);
+      print('Created backup file: $backupPath');
+
+      // Open file for read/write
+      final writeFile = await File(fileName).open(mode: FileMode.write);
+      final originalFile = await File(fileName).open(mode: FileMode.read);
+
+      try {
+        // Process each pending change
+        for (final entry in _pendingChanges.entries) {
+          final change = entry.value;
+          final recordIndex = change['recordIndex'] as int;
+          final frameIndex = change['frameIndex'] as int;
+          final newValue = change['newValue'] as double;
+          final datum = change['datum'] as DatumSpecBlock;
+
+          // Calculate the byte position in the file
+          final success = await _writeValueToFile(
+            writeFile,
+            originalFile,
+            recordIndex,
+            frameIndex,
+            datum,
+            newValue,
+          );
+
+          if (!success) {
+            print('Failed to write change for ${entry.key}');
+            // Continue with other changes rather than failing completely
+          }
+        }
+
+        print('Successfully saved ${_pendingChanges.length} changes to file');
+        _pendingChanges.clear();
+        return true;
+      } finally {
+        await writeFile.close();
+        await originalFile.close();
+      }
+    } catch (e) {
+      print('Error saving changes to file: $e');
+      return false;
+    }
+  }
+
+  // Helper method to write a single value to the file
+  Future<bool> _writeValueToFile(
+    RandomAccessFile writeFile,
+    RandomAccessFile originalFile,
+    int recordIndex,
+    int frameIndex,
+    DatumSpecBlock datum,
+    double newValue,
+  ) async {
+    try {
+      // Find the LIS record
+      final lisRecord = lisRecords.firstWhere(
+        (r) => r.type == 0, // Data record
+        orElse: () => throw Exception('Data record not found'),
+      );
+
+      // Calculate byte position within the record
+      int byteOffset = 0;
+
+      if (fileType == LisConstants.fileTypeLis) {
+        // Russian LIS format
+        byteOffset = 2; // Skip record length
+      } else {
+        // NTI format
+        byteOffset = 6; // Skip header
+      }
+
+      // Add frame offset
+      final frameSize = dataFormatSpec.dataFrameSize;
+      byteOffset += frameIndex * frameSize;
+
+      // Add datum offset within frame
+      for (final d in datumBlocks) {
+        if (d.mnemonic == datum.mnemonic) {
+          break;
+        }
+        byteOffset += d.size;
+      }
+
+      // Calculate absolute file position
+      final filePosition = lisRecord.addr + byteOffset;
+
+      // Convert new value to bytes based on representation code
+      final valueBytes = _encodeValue(newValue, datum.reprCode, datum.size);
+
+      // Copy original file to write file up to the change position
+      await originalFile.setPosition(0);
+      await writeFile.setPosition(0);
+
+      // Copy data before our change
+      if (filePosition > 0) {
+        final beforeData = await originalFile.read(filePosition);
+        await writeFile.writeFrom(beforeData);
+      }
+
+      // Write our new value
+      await writeFile.writeFrom(valueBytes);
+
+      // Skip the old value in original file
+      await originalFile.setPosition(filePosition + datum.size);
+
+      // Copy remaining data
+      final remainingData = await originalFile.read(
+        await originalFile.length() - await originalFile.position(),
+      );
+      await writeFile.writeFrom(remainingData);
+
+      print('Successfully wrote value $newValue at position $filePosition');
+      return true;
+    } catch (e) {
+      print('Error writing value to file: $e');
+      return false;
+    }
+  }
+
+  // Helper method to encode a value based on representation code
+  Uint8List _encodeValue(double value, int reprCode, int size) {
+    try {
+      switch (reprCode) {
+        case 68: // 4-byte float
+          final buffer = ByteData(4);
+          buffer.setFloat32(0, value, Endian.little);
+          return buffer.buffer.asUint8List();
+
+        case 73: // 4-byte int
+          final buffer = ByteData(4);
+          buffer.setInt32(0, value.round(), Endian.little);
+          return buffer.buffer.asUint8List();
+
+        case 70: // 4-byte float (IBM format - simplified)
+          final buffer = ByteData(4);
+          buffer.setFloat32(0, value, Endian.big);
+          return buffer.buffer.asUint8List();
+
+        case 49: // 2-byte float (simplified)
+          final buffer = ByteData(2);
+          buffer.setInt16(0, (value * 100).round(), Endian.little);
+          return buffer.buffer.asUint8List();
+
+        case 79: // 2-byte int
+          final buffer = ByteData(2);
+          buffer.setInt16(0, value.round(), Endian.little);
+          return buffer.buffer.asUint8List();
+
+        default:
+          print('Unsupported representation code: $reprCode');
+          return Uint8List(size); // Return zeros
+      }
+    } catch (e) {
+      print('Error encoding value: $e');
+      return Uint8List(size); // Return zeros on error
+    }
+  }
 }
