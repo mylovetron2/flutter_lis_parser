@@ -1,6 +1,8 @@
 // Data Table Widget for displaying LIS file data
 
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import '../services/lis_file_parser.dart';
 import 'waveform_viewer_dialog.dart';
 
@@ -32,6 +34,172 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   void initState() {
     super.initState();
     _loadTableData();
+  }
+
+  // Merge theo TIME: thay DEPTH trong LIS bằng DEPTH trong TXT
+  Future<void> _mergeByTimeFromTxt() async {
+    try {
+      // Chọn file TXT bằng file picker
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['txt'],
+      );
+      if (result == null || result.files.isEmpty) return;
+      final txtPath = result.files.single.path;
+      if (txtPath == null) return;
+      final txtFile = await File(txtPath).readAsString();
+
+      // Parse TXT, tự động tìm dòng header chứa TIME và DEPTH
+      final lines = txtFile
+          .split(RegExp(r'\r?\n'))
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
+      if (lines.length < 2) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('File TXT không hợp lệ!'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      int headerIdx = -1;
+      List<String> txtHeader = [];
+      for (int i = 0; i < lines.length; ++i) {
+        final cols = lines[i]
+            .split(RegExp(r'\s+|,|;|\t'))
+            .map((e) => e.trim().toUpperCase())
+            .toList();
+        if (cols.contains('TIME') &&
+            (cols.contains('DEPTH') || cols.contains('DEPT'))) {
+          headerIdx = i;
+          txtHeader = lines[i]
+              .split(RegExp(r'\s+|,|;|\t'))
+              .map((e) => e.trim())
+              .toList();
+          debugPrint('TXT header found at line $headerIdx: $txtHeader');
+          break;
+        }
+      }
+      if (headerIdx == -1) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Không tìm thấy dòng header chứa TIME và DEPTH!'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      final timeIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'TIME');
+      int depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPTH');
+      if (depthIdx == -1)
+        depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPT');
+      if (timeIdx == -1 || depthIdx == -1) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('File TXT thiếu cột TIME hoặc DEPTH!'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      // Map TIME->DEPTH từ TXT (chuyển TIME sang giây)
+      double _parseTimeToSeconds(String timeStr) {
+        // Hỗ trợ các định dạng: d:hh:mm:ss:ms, d:hh:mm:ss, hh:mm:ss, mm:ss, ss
+        final parts = timeStr.split(':').map((e) => e.trim()).toList();
+        double seconds = 0;
+        if (parts.length == 5) {
+          // d:hh:mm:ss:ms
+          seconds += (double.tryParse(parts[0]) ?? 0) * 86400;
+          seconds += (double.tryParse(parts[1]) ?? 0) * 3600;
+          seconds += (double.tryParse(parts[2]) ?? 0) * 60;
+          seconds += double.tryParse(parts[3]) ?? 0;
+          seconds += (double.tryParse(parts[4]) ?? 0) / 1000.0;
+        } else if (parts.length == 4) {
+          // d:hh:mm:ss
+          seconds += (double.tryParse(parts[0]) ?? 0) * 86400;
+          seconds += (double.tryParse(parts[1]) ?? 0) * 3600;
+          seconds += (double.tryParse(parts[2]) ?? 0) * 60;
+          seconds += double.tryParse(parts[3]) ?? 0;
+        } else if (parts.length == 3) {
+          // hh:mm:ss
+          seconds += (double.tryParse(parts[0]) ?? 0) * 3600;
+          seconds += (double.tryParse(parts[1]) ?? 0) * 60;
+          seconds += double.tryParse(parts[2]) ?? 0;
+        } else if (parts.length == 2) {
+          // mm:ss
+          seconds += (double.tryParse(parts[0]) ?? 0) * 60;
+          seconds += double.tryParse(parts[1]) ?? 0;
+        } else if (parts.length == 1) {
+          seconds += double.tryParse(parts[0]) ?? 0;
+        }
+        return seconds;
+      }
+
+      final Map<String, String> timeToDepth = {};
+      for (var i = headerIdx + 1; i < lines.length; ++i) {
+        final row = lines[i].split(RegExp(r'\s+|,|;|\t'));
+        if (row.length > depthIdx && row.length > timeIdx) {
+          final timeSec = _parseTimeToSeconds(row[timeIdx]);
+          timeToDepth[timeSec.toString()] = row[depthIdx];
+        }
+      }
+      debugPrint(
+        'TXT timeToDepth mapping: ${timeToDepth.length} entries, sample: '
+        '${timeToDepth.entries.take(5).toList()}',
+      );
+      debugPrint('TXT TIME values: ${timeToDepth.keys.toList()}');
+      // Merge vào tableData
+      int matchCount = 0;
+      for (var i = 0; i < tableData.length; ++i) {
+        final row = tableData[i];
+        final rawTime = row['TIME'];
+        if (rawTime == null) {
+          debugPrint('Row $i: TIME is null, skipping');
+          continue;
+        }
+        double? timeNum;
+        if (rawTime is num) {
+          timeNum = rawTime.toDouble();
+        } else {
+          timeNum = double.tryParse(rawTime.toString());
+        }
+        if (timeNum == null) {
+          debugPrint('Row $i: TIME "$rawTime" is not a number, skipping');
+          continue;
+        }
+        final timeVal = (timeNum / 1000).toString();
+        if (timeToDepth.containsKey(timeVal)) {
+          final newDepth = timeToDepth[timeVal];
+          debugPrint(
+            'Row $i: TIME(LIS)=$rawTime / 1000 = $timeVal, DEPTH(TXT)=$newDepth, DEPTH(LIS)=${row['DEPTH']}',
+          );
+          if (newDepth != null && newDepth != row['DEPTH']?.toString()) {
+            setState(() {
+              tableData[i]['DEPTH'] = newDepth;
+              modifiedValues['${i}_DEPTH'] = newDepth;
+            });
+            matchCount++;
+          }
+        } else {
+          debugPrint(
+            'Row $i: TIME(LIS)=$rawTime / 1000 = $timeVal, no match in TXT',
+          );
+        }
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Đã merge DEPTH từ TXT cho $matchCount dòng TIME khớp!',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi merge: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   @override
@@ -435,6 +603,13 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                       ),
                       const SizedBox(width: 8),
                     ],
+                    // Nút merge DEPTH theo TIME (luôn hiển thị)
+                    IconButton(
+                      onPressed: _mergeByTimeFromTxt,
+                      icon: const Icon(Icons.merge_type),
+                      tooltip: 'Merge DEPTH từ TXT theo TIME',
+                    ),
+                    const SizedBox(width: 8),
                     // Edit mode toggle
                     IconButton(
                       onPressed: () {
