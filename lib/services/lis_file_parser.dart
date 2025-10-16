@@ -11,7 +11,14 @@ import '../models/data_format_spec.dart';
 import '../constants/lis_constants.dart';
 import 'code_reader.dart';
 
+// Silence debug prints in this file by shadowing the top-level print function.
+// This keeps the original code intact but prevents console output from debug prints.
+void print(Object? object) {}
+
 class LisFileParser {
+  /// Returns the mnemonic (column name) of the first datum in the LIS file, or empty string if not available
+  String get firstColumnName =>
+      datumBlocks.isNotEmpty ? datumBlocks.first.mnemonic : '';
   int fileType = LisConstants.fileTypeLis;
   String fileName = '';
   bool isFileOpen = false;
@@ -53,10 +60,22 @@ class LisFileParser {
 
   RandomAccessFile? file;
 
+  // Pending changes storage
+
   LisFileParser() {
+    // LisFileParser constructor initialized
     byteData = Uint8List(200000); // Increase buffer size for larger records
     fileData = Float32List(60000);
     dataFormatSpec.init();
+  }
+
+  // Track deleted rows as pending changes
+  void markRowDeleted(int rowIndex) {
+    final changeKey = 'delete_row_$rowIndex';
+    if (!_pendingChanges.containsKey(changeKey)) {
+      _pendingChanges[changeKey] = {'rowIndex': rowIndex, 'type': 'delete'};
+      // Marked row $rowIndex as deleted (pending change)
+    }
   }
 
   Future<void> openLisFile(
@@ -64,17 +83,17 @@ class LisFileParser {
     Function(double)? onProgress,
   }) async {
     try {
-      print('Opening LIS file: $filePath');
+      // Opening LIS file: $filePath
       await closeLisFile();
 
       fileName = filePath;
       file = await File(filePath).open();
-      print('File opened successfully, size: ${await file!.length()} bytes');
+      // File opened successfully
 
       if (onProgress != null) onProgress(10);
 
       // Detect file type (LIS or NTI)
-      print('Detecting file type...');
+      // Detecting file type...
       await _detectFileType();
       print(
         'File type detected: ${fileType == LisConstants.fileTypeNti ? "NTI" : "LIS"}',
@@ -88,11 +107,34 @@ class LisFileParser {
         await _openLIS(onProgress);
       }
 
+      // After parsing records and datum blocks, compute depth-related values
+      // Set step based on frame spacing (convert to milliseconds-based integer like original C++ lStep)
+      // Keep step as an integer representing frame spacing in milliseconds (consistent with original logic)
+      try {
+        final spacing = dataFormatSpec.frameSpacing; // in original units
+        // Convert to milliseconds similar to C++ logic: multiply by 1000
+        step = (spacing * 1000).round();
+      } catch (_) {
+        step = 0;
+      }
+
+      // Compute startDepth and endDepth using existing helpers (they handle unit conversion)
+      try {
+        startDepth = await _getStartDepth();
+      } catch (_) {
+        startDepth = 0.0;
+      }
+      try {
+        endDepth = await _getEndDepth();
+      } catch (_) {
+        endDepth = startDepth;
+      }
+
       if (onProgress != null) onProgress(100);
       isFileOpen = true;
-      print('File parsing completed successfully');
+      // File parsing completed successfully
     } catch (e) {
-      print('Error opening LIS file: $e');
+      // Error opening LIS file: $e
       rethrow;
     }
   }
@@ -101,7 +143,7 @@ class LisFileParser {
     if (file == null) return;
 
     try {
-      print('Starting file type detection...');
+      // Starting file type detection...
       await file!.setPosition(0);
 
       // Read first 20 bytes to understand file structure
@@ -124,10 +166,10 @@ class LisFileParser {
       int iteration = 0;
 
       while (iteration < maxIterations) {
-        print('Reading blank record at position: $addr');
+        // Reading blank record at position: $addr
 
         if (addr + 16 >= await file!.length()) {
-          print('Reached end of file');
+          // Reached end of file
           break;
         }
 
@@ -143,7 +185,7 @@ class LisFileParser {
         final group4 = await file!.read(4);
 
         if (group2.length < 4 || group3.length < 4 || group4.length < 4) {
-          print('Insufficient data read, breaking');
+          // Insufficient data read, breaking
           break;
         }
 
@@ -158,13 +200,11 @@ class LisFileParser {
         );
         tempBlankRecords.add(correctedBlankRec);
 
-        print(
-          'Blank record ${iteration}: addr=${addr}, nextAddr=${correctedBlankRec.nextAddr}, nextRecLen=${correctedBlankRec.nextRecLen}, prevAddr=${correctedBlankRec.prevAddr}',
-        );
+        // Blank record ${iteration} at addr=${addr}
 
         if (correctedBlankRec.nextAddr < 0 ||
             correctedBlankRec.nextAddr >= await file!.length()) {
-          print('Invalid nextAddr (${correctedBlankRec.nextAddr}), breaking');
+          // Invalid nextAddr, breaking
           break;
         }
 
@@ -176,7 +216,7 @@ class LisFileParser {
 
         // Check if we reached near end of file (as per C++)
         if (await file!.position() >= await file!.length() - 16) {
-          print('Near end of file, breaking');
+          // Near end of file, breaking
           break;
         }
 
@@ -186,9 +226,7 @@ class LisFileParser {
       // File type detection based on blank record address consistency
       // Default to LIS (Russian format) first - matching C++ logic
       fileType = LisConstants.fileTypeLis;
-      print(
-        'Read ${tempBlankRecords.length} blank records for file type detection',
-      );
+      // Read ${tempBlankRecords.length} blank records for file type detection
 
       // Match C++ logic exactly: need > 5 blank records for reliable LIS detection
       if (tempBlankRecords.length > 5) {
@@ -198,16 +236,12 @@ class LisFileParser {
           // In Russian LIS: blankArr[i]->lAddr == blankArr[i+1]->lPrevAddr
           // and blankArr[i]->lNextAddr == blankArr[i+1]->lAddr
           if (tempBlankRecords[i].addr != tempBlankRecords[i + 1].prevAddr) {
-            print(
-              'Address inconsistency at record $i: ${tempBlankRecords[i].addr} != ${tempBlankRecords[i + 1].prevAddr}',
-            );
+            // Address inconsistency at record $i
             isConsistent = false;
             break;
           }
           if (tempBlankRecords[i].nextAddr != tempBlankRecords[i + 1].addr) {
-            print(
-              'NextAddr inconsistency at record $i: ${tempBlankRecords[i].nextAddr} != ${tempBlankRecords[i + 1].addr}',
-            );
+            // NextAddr inconsistency at record $i
             isConsistent = false;
             break;
           }
@@ -215,24 +249,18 @@ class LisFileParser {
 
         if (!isConsistent) {
           fileType = LisConstants.fileTypeNti; // Halliburton format
-          print('File type detected as NTI due to blank record inconsistency');
+          // File type detected as NTI due to blank record inconsistency
         } else {
-          print(
-            'File type detected as LIS (Russian) - blank records are consistent',
-          );
+          // File type detected as LIS (Russian) - blank records are consistent
         }
       } else {
         fileType = LisConstants.fileTypeNti; // Less than 5 records = NTI
-        print(
-          'File type detected as NTI - insufficient blank records (${tempBlankRecords.length} <= 5)',
-        );
+        // File type detected as NTI - insufficient blank records
       }
 
-      print(
-        'File type detection completed: ${fileType == LisConstants.fileTypeNti ? "NTI" : "LIS (Russian)"}',
-      );
+      // File type detection completed
     } catch (e) {
-      print('Error in file type detection: $e');
+      // Error in file type detection: $e
       fileType = LisConstants.fileTypeNti; // Default to NTI on error
     }
   }
@@ -241,28 +269,26 @@ class LisFileParser {
     if (file == null) return;
 
     try {
-      print('Starting NTI parsing...');
+      // Starting NTI parsing
       await file!.setPosition(0);
       int currentPos = 0;
       int fileLength = await file!.length();
       int recordIndex = 0;
       int maxRecords = 1000; // Safety limit
 
-      print('File length: $fileLength bytes');
+      // File length: $fileLength bytes
 
       // Read first 20 bytes to understand structure
       final firstBytes = await file!.read(20);
-      print(
-        'First 20 bytes: ${firstBytes.map((b) => b.toString().padLeft(3)).join(' ')}',
-      );
+      // First 20 bytes read
 
       // Check if first 8 bytes are zeros (header/padding)
       bool hasZeroHeader = firstBytes.take(8).every((b) => b == 0);
       if (hasZeroHeader) {
-        print('Detected zero header, starting from position 8');
+        // Detected zero header, starting from position 8
         currentPos = 8; // Skip potential header
       } else {
-        print('No zero header detected, starting from position 0');
+        // No zero header detected, starting from position 0
         currentPos = 0;
       }
 
@@ -282,17 +308,12 @@ class LisFileParser {
           // Read Blank Record Header (16 bytes)
           final blankHeader = await file!.read(16);
           if (blankHeader.length < 16) {
-            print('Insufficient blank header bytes at position $currentPos');
+            // Insufficient blank header bytes
             break;
           }
 
           // Parse Blank Record Header
-          // Bytes 0-3: Record length (little endian)
-          int recordLength =
-              blankHeader[0] +
-              (blankHeader[1] << 8) +
-              (blankHeader[2] << 16) +
-              (blankHeader[3] << 24);
+          // Bytes 0-3: Record length (little endian) - value not used here
 
           // Bytes 8-11: Next record address (little endian)
           int nextAddr =
@@ -304,10 +325,7 @@ class LisFileParser {
           // Bytes 12-13: Next record length (big endian)
           int nextRecLength = (blankHeader[12] << 8) + blankHeader[13];
 
-          print('Record $recordIndex at pos $currentPos:');
-          print(
-            '  Blank Header: recordLength=$recordLength, nextAddr=$nextAddr, nextRecLength=$nextRecLength',
-          );
+          // Record $recordIndex at pos $currentPos
 
           // Move to data record (right after 16-byte blank header)
           int dataPos = currentPos + 16;
@@ -323,9 +341,7 @@ class LisFileParser {
               int type =
                   dataBytes[0] + (dataBytes[1] << 8); // Type in little endian
 
-              print(
-                '  Data Record: type=$type (0x${type.toRadixString(16)}), length=$nextRecLength',
-              );
+              // Data Record: type=$type, length=$nextRecLength
 
               // Determine record name
               String recordName = _getRecordName(type, dataPos);
@@ -358,14 +374,14 @@ class LisFileParser {
 
           recordIndex++;
         } catch (e) {
-          print('Error processing record $recordIndex: $e');
+          // Error processing record $recordIndex: $e
           // Try to continue from next position
           currentPos += 16; // Skip to next potential blank header
           continue;
         }
       }
 
-      print('Processed $recordIndex records');
+      // Processed $recordIndex records
 
       if (onProgress != null) onProgress(90);
 
@@ -397,7 +413,9 @@ class LisFileParser {
       await file!.setPosition(0);
 
       blankRecords.clear();
+      print('[LisFileParser] _openLIS: blankRecords cleared');
       lisRecords.clear();
+      print('[LisFileParser] _openLIS: lisRecords cleared');
 
       // Read Blank Table Content (similar to C++ OpenLIS)
       int currentAddr = 0;
@@ -449,7 +467,7 @@ class LisFileParser {
         }
       }
 
-      print('Read ${blankRecords.length} blank records');
+      // Read ${blankRecords.length} blank records
 
       // Read Record Table Content
       List<LisRecord> tempRecords = [];
@@ -513,6 +531,12 @@ class LisFileParser {
       }
 
       lisRecords = tempRecords;
+      print(
+        '[LisFileParser] After parse: lisRecords.length = ${lisRecords.length}',
+      );
+      print(
+        '[LisFileParser] Before save: lisRecords.length = ${lisRecords.length}',
+      );
       print('Parsed ${lisRecords.length} LIS records');
 
       // Read data format specification and datum blocks
@@ -954,6 +978,7 @@ class LisFileParser {
     return -1;
   }
 
+  // ignore: unused_element
   Future<double> _getStartDepth() async {
     if (file == null || startDataRec < 0) return 0.0;
 
@@ -970,9 +995,19 @@ class LisFileParser {
       depthBytes.length,
     );
 
-    return _convertToMeter(depth, dataFormatSpec.depthUnit);
+    print(
+      '[DEBUG] StartDepth raw value: $depth, bytes: ${depthBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+    );
+
+    double convertedDepth = _convertToMeter(depth, dataFormatSpec.depthUnit);
+    print(
+      '[DEBUG] StartDepth converted to meter: $convertedDepth, unit: ${dataFormatSpec.depthUnit}',
+    );
+
+    return convertedDepth;
   }
 
+  // ignore: unused_element
   Future<double> _getEndDepth() async {
     if (file == null || endDataRec < 0) return 0.0;
 
@@ -1029,8 +1064,11 @@ class LisFileParser {
 
     // Clear all data
     blankRecords.clear();
+    print('[LisFileParser] closeLisFile: blankRecords cleared');
     lisRecords.clear();
+    print('[LisFileParser] closeLisFile: lisRecords cleared');
     datumBlocks.clear();
+    print('[LisFileParser] closeLisFile: datumBlocks cleared');
     consBlocks.clear();
     outpBlocks.clear();
     ak73Blocks.clear();
@@ -1085,19 +1123,7 @@ class LisFileParser {
     try {
       final oldPosition = await file!.position();
 
-      // Calculate curve number (following C++ logic)
-      int curveNum = 0;
-      for (var datum in datumBlocks) {
-        if (datum.size <= 4) {
-          curveNum += 1; // Single value datum contributes 1
-        } else {
-          curveNum += datum.dataItemNum; // Array datum contributes all elements
-        }
-      }
-
-      if (dataFormatSpec.depthRecordingMode == 0) {
-        curveNum -= 1; // Depth per frame, subtract 1
-      }
+      // curveNum calculation removed (not used)
 
       List<double> result = [];
 
@@ -1735,7 +1761,7 @@ class LisFileParser {
   }) async {
     try {
       if (!isFileOpen) {
-        print('File not open for updating');
+        print('[updateDataValue] File not open for updating');
         return false;
       }
 
@@ -1745,29 +1771,33 @@ class LisFileParser {
         orElse: () => throw Exception('Column $columnName not found'),
       );
 
-      // Skip DEPTH column and array data for safety
-      if (columnName == 'DEPTH' || datum.size > 4) {
-        print('Cannot update DEPTH column or array data');
+      // Skip array data for safety, but ALLOW DEPTH/DEPT update
+      if (datum.size > 4) {
+        print('[updateDataValue] Cannot update array data for $columnName');
         return false;
       }
 
       // Get the actual record index in the data records range
       final actualRecordIndex = startDataRec + recordIndex;
       if (actualRecordIndex < startDataRec || actualRecordIndex > endDataRec) {
-        print('Record index out of range: $actualRecordIndex');
+        print(
+          '[updateDataValue] Record index out of range: $actualRecordIndex (start=$startDataRec, end=$endDataRec)',
+        );
         return false;
       }
 
       // Calculate the position in the raw data
       final allData = await getAllData(actualRecordIndex);
       if (allData.isEmpty) {
-        print('No data found for record $actualRecordIndex');
+        print('[updateDataValue] No data found for record $actualRecordIndex');
         return false;
       }
 
       final frameNum = getFrameNum(actualRecordIndex);
       if (frameIndex >= frameNum) {
-        print('Frame index out of range: $frameIndex >= $frameNum');
+        print(
+          '[updateDataValue] Frame index out of range: $frameIndex >= $frameNum',
+        );
         return false;
       }
 
@@ -1811,12 +1841,17 @@ class LisFileParser {
       }
 
       if (currentIndex >= allData.length) {
-        print('Data index out of bounds: $currentIndex >= ${allData.length}');
+        print(
+          '[updateDataValue] Data index out of bounds: $currentIndex >= ${allData.length}',
+        );
         return false;
       }
 
       // Store the change for later file writing
       final changeKey = '${actualRecordIndex}_${frameIndex}_${columnName}';
+      print(
+        '[updateDataValue] Storing change: recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, column=$columnName, dataIndex=$currentIndex, oldValue=${allData[currentIndex]}, newValue=$newValue, changeKey=$changeKey',
+      );
       if (!_pendingChanges.containsKey(changeKey)) {
         _pendingChanges[changeKey] = {
           'recordIndex': actualRecordIndex,
@@ -1829,17 +1864,19 @@ class LisFileParser {
         };
 
         print(
-          'Stored pending change: $changeKey = $newValue (was ${allData[currentIndex]})',
+          '[updateDataValue] Stored pending change: $changeKey = $newValue (was ${allData[currentIndex]})',
         );
         return true;
       } else {
         // Update existing pending change
         _pendingChanges[changeKey]!['newValue'] = newValue;
-        print('Updated pending change: $changeKey = $newValue');
+        print(
+          '[updateDataValue] Updated pending change: $changeKey = $newValue',
+        );
         return true;
       }
     } catch (e) {
-      print('Error updating data value: $e');
+      print('[updateDataValue] Error updating data value: $e');
       return false;
     }
   }
@@ -1874,23 +1911,31 @@ class LisFileParser {
       print('Saving ${_pendingChanges.length} pending changes to file...');
       print('File name: $fileName');
 
-      // Create a backup copy first
-      final backupPath = '$fileName.backup';
-      await File(fileName).copy(backupPath);
-      print('Created backup file: $backupPath');
+      // Tạo đường dẫn file mới để lưu (không ghi đè file gốc)
+      final extIndex = fileName.lastIndexOf('.');
+      final newFileName = extIndex > 0
+          ? fileName.substring(0, extIndex) +
+                '_modified' +
+                fileName.substring(extIndex)
+          : fileName + '_modified';
+      print('Lưu thay đổi vào file mới: $newFileName');
 
       // Read entire file into memory
       final originalBytes = await File(fileName).readAsBytes();
       final modifiedBytes = Uint8List.fromList(originalBytes);
 
-      // Process each pending change
+      // Now apply all non-delete pending changes
       for (final entry in _pendingChanges.entries) {
         final change = entry.value;
+        if (change['type'] == 'delete') continue;
         final actualRecordIndex = change['recordIndex'] as int;
         final frameIndex = change['frameIndex'] as int;
         final newValue = change['newValue'] as double;
         final datum = change['datum'] as DatumSpecBlock;
-
+        final oldValue = change['oldValue'];
+        print(
+          '[savePendingChanges] Applying change: recordIndex=$actualRecordIndex, frameIndex=$frameIndex, column=${datum.mnemonic}, oldValue=$oldValue, newValue=$newValue',
+        );
         // Calculate the byte position in the file and update in memory
         final success = _updateBytesInMemory(
           modifiedBytes,
@@ -1901,30 +1946,21 @@ class LisFileParser {
         );
 
         if (!success) {
-          print('Failed to update change for ${entry.key}');
+          print('[savePendingChanges] Failed to update change for $entry');
           // Continue with other changes rather than failing completely
         }
       }
 
       // Write the modified bytes back to file
-      final originalFileSize = await File(fileName).length();
-      print('Original file size: $originalFileSize bytes');
       print('Modified bytes length: ${modifiedBytes.length} bytes');
 
-      // CRITICAL FIX: Close the file handle before writing to avoid conflicts
-      if (file != null) {
-        await file!.close();
-        print('DEBUG: Closed file handle before writing');
-      }
+      // Ghi dữ liệu đã chỉnh sửa ra file mới (không ghi đè file gốc)
+      await File(newFileName).writeAsBytes(modifiedBytes);
+      print('DEBUG: Written modified bytes to new file');
 
-      await File(fileName).writeAsBytes(modifiedBytes);
-      print('DEBUG: Written modified bytes to file');
-
-      // Re-open the file handle
-      file = await File(fileName).open(mode: FileMode.read);
-      print('DEBUG: Re-opened file handle after writing');
-
-      final newFileSize = await File(fileName).length();
+      // Mở lại file handle tới file mới
+      file = await File(newFileName).open(mode: FileMode.read);
+      final newFileSize = await File(newFileName).length();
       print('New file size after write: $newFileSize bytes');
 
       print('Successfully saved ${_pendingChanges.length} changes to file');
@@ -1933,6 +1969,9 @@ class LisFileParser {
       print('========================================');
       print('');
       _pendingChanges.clear();
+
+      // Đóng file và clear buffer sau khi đã ghi xong
+      await closeLisFile();
       return true;
     } catch (e) {
       print('Error saving changes to file: $e');
@@ -1956,21 +1995,30 @@ class LisFileParser {
       // Find the data records in order
       final dataRecords = lisRecords.where((r) => r.type == 0).toList();
       print(
-        'DEBUG: Found ${dataRecords.length} data records, startDataRec=$startDataRec',
+        'DEBUG: Found \u001b[1m${dataRecords.length}\u001b[0m data records, startDataRec=$startDataRec',
       );
 
-      // Calculate which data record this change belongs to
-      final dataRecordIndex = actualRecordIndex - startDataRec;
-      if (dataRecordIndex < 0 || dataRecordIndex >= dataRecords.length) {
+      if (dataRecords.isEmpty) {
         print(
-          'Data record index out of bounds: $dataRecordIndex (range: 0-${dataRecords.length - 1})',
+          'DEBUG: lisRecords.length = \u001b[1m${lisRecords.length}\u001b[0m',
+        );
+        for (int i = 0; i < lisRecords.length; i++) {
+          final r = lisRecords[i];
+          print('  lisRecords[$i]: type=${r.type}, toString=${r.toString()}');
+        }
+      }
+
+      final dataRecordIdx = actualRecordIndex - startDataRec;
+      if (dataRecordIdx < 0 || dataRecordIdx >= dataRecords.length) {
+        print(
+          'Data record index out of bounds: $dataRecordIdx (range: 0--${dataRecords.length - 1})',
         );
         return false;
       }
 
-      final lisRecord = dataRecords[dataRecordIndex];
+      final lisRecord = dataRecords[dataRecordIdx];
       print(
-        'DEBUG: Using data record at index $dataRecordIndex, addr=${lisRecord.addr}',
+        'DEBUG: Using data record at index $dataRecordIdx, addr=${lisRecord.addr}',
       );
 
       // Calculate byte position within the record
@@ -2169,105 +2217,70 @@ class LisFileParser {
 
   // Russian LIS Float Encoder (reprCode 68) - Exact reverse of C++ ReadCode
   Uint8List _encodeRussianLisFloat(double value) {
-    try {
-      print('DEBUG ENCODE: input value=$value');
+    // Custom encoding algorithm matching C++ ReadCode logic
+    print('DEBUG ENCODE: input value=$value');
 
-      if (value == 0.0) {
-        final result = Uint8List.fromList([0, 0, 0, 0]);
-        print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
-        return result;
-      }
-
-      bool isNegative = value < 0;
-      double absValue = value.abs();
-
-      // Find exponent and fraction to recreate the C++ ReadCode logic
-      // C++ positive: lExponent = pow(2, ntemp-128), fResult = fFraction * lExponent
-      // C++ negative: lExponent = pow(2, 127-ntemp), fResult = (-1) * fFraction * lExponent
-
-      double targetFraction;
-      int exponentBits;
-
-      if (isNegative) {
-        // For negative: find ntemp such that absValue = fFraction * pow(2, 127-ntemp)
-        // Rearrange: ntemp = 127 - log2(absValue/fFraction)
-        // Assume fFraction around 0.5-1.0 range
-        targetFraction = absValue;
-        exponentBits = 127;
-
-        // Normalize fraction to [0.5, 1.0) range
-        while (targetFraction >= 1.0) {
-          targetFraction /= 2.0;
-          exponentBits--;
-        }
-        while (targetFraction < 0.5) {
-          targetFraction *= 2.0;
-          exponentBits++;
-        }
-      } else {
-        // For positive: find ntemp such that absValue = fFraction * pow(2, ntemp-128)
-        // Rearrange: ntemp = 128 + log2(absValue/fFraction)
-        targetFraction = absValue;
-        exponentBits = 128;
-
-        // Normalize fraction to [0.5, 1.0) range
-        while (targetFraction >= 1.0) {
-          targetFraction /= 2.0;
-          exponentBits++;
-        }
-        while (targetFraction < 0.5) {
-          targetFraction *= 2.0;
-          exponentBits--;
-        }
-      }
-
-      // Clamp exponent to valid range
-      exponentBits = exponentBits.clamp(0, 255);
-
-      // Convert fraction to 23-bit mantissa using C++ algorithm
-      // C++ uses: fFactor=0.5, checks if(ntemp>=0x80000000), fFraction+=fFactor, fFactor/=2
-      int mantissaBits = 0;
-      double remainingFraction = targetFraction;
-      double bitValue = 0.5;
-
-      for (int i = 22; i >= 0; i--) {
-        // MSB first
-        if (remainingFraction >= bitValue) {
-          mantissaBits |= (1 << i);
-          remainingFraction -= bitValue;
-        }
-        bitValue /= 2.0;
-      }
-
-      // Handle negative numbers - C++ does complement operation
-      if (isNegative) {
-        // C++ negative: ntemp=~ntemp; ntemp=ntemp+1;
-        mantissaBits = (~mantissaBits + 1) & 0x7FFFFF;
-      }
-
-      // Assemble the 32-bit result
-      int result = 0;
-      if (isNegative) {
-        result |= 0x80000000; // Sign bit
-      }
-      result |= (exponentBits << 23); // Exponent (8 bits)
-      result |= mantissaBits; // Mantissa (23 bits)
-
-      // Extract bytes in big-endian order
-      int ch0 = (result >> 24) & 0xFF;
-      int ch1 = (result >> 16) & 0xFF;
-      int ch2 = (result >> 8) & 0xFF;
-      int ch3 = result & 0xFF;
-
-      final encoded = Uint8List.fromList([ch0, ch1, ch2, ch3]);
-      print(
-        'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
-      );
-
-      return encoded;
-    } catch (e) {
-      print('Error encoding Russian LIS float: $e');
-      return Uint8List.fromList([0, 0, 0, 0]);
+    if (value == 0.0) {
+      final result = Uint8List.fromList([0, 0, 0, 0]);
+      print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
+      return result;
     }
+
+    // Handle sign bit
+    bool isNegative = value < 0;
+    double absValue = value.abs();
+
+    // Normalize fraction to [0.5, 1.0) range
+    double targetFraction = absValue;
+    int exponentBits = isNegative ? 127 : 128;
+
+    while (targetFraction >= 1.0) {
+      targetFraction /= 2.0;
+      exponentBits++;
+    }
+    while (targetFraction < 0.5) {
+      targetFraction *= 2.0;
+      exponentBits--;
+    }
+
+    // Clamp exponent to valid range
+    exponentBits = exponentBits.clamp(0, 255);
+
+    // Convert fraction to 23-bit mantissa using C++ algorithm
+    int mantissaBits = 0;
+    double remainingFraction = targetFraction;
+    double bitValue = 0.5;
+    for (int i = 22; i >= 0; i--) {
+      if (remainingFraction >= bitValue) {
+        mantissaBits |= (1 << i);
+        remainingFraction -= bitValue;
+      }
+      bitValue /= 2.0;
+    }
+
+    // Handle negative numbers - C++ does complement operation
+    if (isNegative) {
+      mantissaBits = (~mantissaBits + 1) & 0x7FFFFF;
+    }
+
+    // Assemble the 32-bit result
+    int result = 0;
+    if (isNegative) {
+      result |= 0x80000000; // Sign bit
+    }
+    result |= (exponentBits << 23); // Exponent (8 bits)
+    result |= mantissaBits; // Mantissa (23 bits)
+
+    // Extract bytes in big-endian order
+    int ch0 = (result >> 24) & 0xFF;
+    int ch1 = (result >> 16) & 0xFF;
+    int ch2 = (result >> 8) & 0xFF;
+    int ch3 = result & 0xFF;
+
+    final encoded = Uint8List.fromList([ch0, ch1, ch2, ch3]);
+    print(
+      'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
+    );
+    return encoded;
   }
 }

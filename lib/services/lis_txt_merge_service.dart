@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+// import removed: flutter/foundation not required
 import '../services/lis_file_parser.dart';
 import '../models/lis_record.dart';
 
@@ -16,14 +16,10 @@ class LisTxtMergeService {
     List<List<String>> dataRows,
   ) async {
     try {
-      debugPrint(
-        '[mergeLisWithTxt] Bắt đầu merge LIS: $lisPath với TXT dataRows (${dataRows.length} dòng)',
-      );
+      // debug: mergeLisWithTxt start for $lisPath with ${dataRows.length} rows
       final parser = LisFileParser();
       await parser.openLisFile(lisPath);
-      debugPrint(
-        '[mergeLisWithTxt] Đã mở LIS file, tổng số record: \\${parser.lisRecords.length}',
-      );
+      // debug: opened LIS file, parser.lisRecords.length = ${parser.lisRecords.length}
       // Tạo map TIME->DEPTH từ TXT
       final Map<int, double> timeToDepth = {};
       int txtRowCount = 0;
@@ -35,12 +31,12 @@ class LisTxtMergeService {
             timeToDepth[t] = d;
             txtRowCount++;
             if (txtRowCount <= 5) {
-              debugPrint('[mergeLisWithTxt] TXT mapping: TIME=$t -> DEPTH=$d');
+              // debug: TXT mapping sample
             }
           }
         }
       }
-      debugPrint('[mergeLisWithTxt] Tổng số TIME->DEPTH mapping: $txtRowCount');
+      // debug: total TIME->DEPTH mappings: $txtRowCount
       // Duyệt block LIS, nếu TIME khớp thì thay DEPTH
       int matchCount = 0;
       final mergedRecords = <dynamic>[];
@@ -55,7 +51,7 @@ class LisTxtMergeService {
         }
       }
       if (timeColIdx == -1) {
-        debugPrint('[mergeLisWithTxt] Không tìm thấy cột TIME trong LIS');
+        // debug: TIME column not found in LIS
       }
       for (int recIdx = 0; recIdx < parser.lisRecords.length; recIdx++) {
         final rec = parser.lisRecords[recIdx];
@@ -67,7 +63,7 @@ class LisTxtMergeService {
               time = data[timeColIdx].round();
             }
           } catch (e) {
-            debugPrint('[mergeLisWithTxt] Lỗi đọc TIME ở record $recIdx: $e');
+            // debug: error reading TIME at record $recIdx: $e
           }
         }
         if (time != null && timeToDepth.containsKey(time)) {
@@ -84,23 +80,17 @@ class LisTxtMergeService {
           );
           matchCount++;
           if (matchCount <= 5) {
-            debugPrint(
-              '[mergeLisWithTxt] LIS record $lisIdx: TIME=$time khớp, DEPTH mới=${timeToDepth[time]}',
-            );
+            // debug: matched record sample
           }
         } else {
           mergedRecords.add(rec);
           if (lisIdx < 5) {
-            debugPrint(
-              '[mergeLisWithTxt] LIS record $lisIdx: TIME=$time không khớp, giữ nguyên',
-            );
+            // debug: unmatched record sample
           }
         }
         lisIdx++;
       }
-      debugPrint(
-        '[mergeLisWithTxt] Merge xong. Số record khớp: $matchCount / ${parser.lisRecords.length}',
-      );
+      // debug: merge completed. matched $matchCount / ${parser.lisRecords.length}
       return {
         'blockList': mergedRecords,
         'curveInfoList': parser.datumBlocks,
@@ -108,8 +98,8 @@ class LisTxtMergeService {
         'success': true,
         'message': 'Merge LIS với TXT thành công ($matchCount dòng khớp)',
       };
-    } catch (e, st) {
-      debugPrint('[mergeLisWithTxt] Lỗi: $e\n$st');
+    } catch (e) {
+      // debug: merge error: $e
       return {
         'blockList': [],
         'curveInfoList': [],

@@ -40,6 +40,24 @@ class BlankRecord {
     );
   }
 
+  // Chuyển BlankRecord thành mảng bytes (giả định 16 bytes, cần chỉnh lại đúng format thực tế nếu cần)
+  List<int> toBytes() {
+    final bytes = <int>[];
+    bytes.addAll(_int32ToBytesLE(prevAddr));
+    bytes.addAll(_int32ToBytesLE(addr));
+    bytes.addAll(_int32ToBytesLE(nextAddr));
+    bytes.addAll(_int32ToBytesLE(nextRecLen));
+    // Nếu có trường num hoặc các trường khác, bổ sung vào đây
+    return bytes;
+  }
+
+  List<int> _int32ToBytesLE(int value) => [
+    value & 0xFF,
+    (value >> 8) & 0xFF,
+    (value >> 16) & 0xFF,
+    (value >> 24) & 0xFF,
+  ];
+
   @override
   String toString() {
     return 'BlankRecord(prevAddr: $prevAddr, addr: $addr, nextAddr: $nextAddr, nextRecLen: $nextRecLen, num: $num)';

@@ -77,7 +77,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
               .split(RegExp(r'\s+|,|;|\t'))
               .map((e) => e.trim())
               .toList();
-          debugPrint('TXT header found at line $headerIdx: $txtHeader');
+          // debug: TXT header found at line $headerIdx
           break;
         }
       }
@@ -144,18 +144,14 @@ class _DataTableWidgetState extends State<DataTableWidget> {
           timeToDepth[timeSec.toString()] = row[depthIdx];
         }
       }
-      debugPrint(
-        'TXT timeToDepth mapping: ${timeToDepth.length} entries, sample: '
-        '${timeToDepth.entries.take(5).toList()}',
-      );
-      debugPrint('TXT TIME values: ${timeToDepth.keys.toList()}');
+      // debug: TXT timeToDepth mapping computed
       // Merge vào tableData
       int matchCount = 0;
-      for (var i = 0; i < tableData.length; ++i) {
+      for (int i = tableData.length - 1; i >= 0; --i) {
         final row = tableData[i];
         final rawTime = row['TIME'];
         if (rawTime == null) {
-          debugPrint('Row $i: TIME is null, skipping');
+          // debug: Row $i: TIME is null, skipping
           continue;
         }
         double? timeNum;
@@ -165,26 +161,36 @@ class _DataTableWidgetState extends State<DataTableWidget> {
           timeNum = double.tryParse(rawTime.toString());
         }
         if (timeNum == null) {
-          debugPrint('Row $i: TIME "$rawTime" is not a number, skipping');
+          // debug: Row $i: TIME "$rawTime" is not a number, skipping
           continue;
         }
         final timeVal = (timeNum / 1000).toString();
         if (timeToDepth.containsKey(timeVal)) {
           final newDepth = timeToDepth[timeVal];
-          debugPrint(
-            'Row $i: TIME(LIS)=$rawTime / 1000 = $timeVal, DEPTH(TXT)=$newDepth, DEPTH(LIS)=${row['DEPTH']}',
-          );
+          // debug: Row $i: TIME(LIS)=$rawTime / 1000 = $timeVal, DEPTH(TXT)=$newDepth
           if (newDepth != null && newDepth != row['DEPTH']?.toString()) {
             setState(() {
               tableData[i]['DEPTH'] = newDepth;
               modifiedValues['${i}_DEPTH'] = newDepth;
             });
+            // Ghi thay đổi vào pending changes của parser
+            final lisDepthCol = widget.parser.firstColumnName;
+            // debug: MERGE Row $i updateDataValue
+            await widget.parser.updateDataValue(
+              recordIndex: i,
+              frameIndex: 0,
+              columnName: lisDepthCol,
+              newValue: double.tryParse(newDepth) ?? 0.0,
+            );
             matchCount++;
           }
         } else {
-          debugPrint(
-            'Row $i: TIME(LIS)=$rawTime / 1000 = $timeVal, no match in TXT',
-          );
+          // debug: Row $i: no match in TXT => remove row
+          setState(() {
+            tableData.removeAt(i);
+          });
+          // Notify parser of row deletion
+          widget.parser.markRowDeleted(i);
         }
       }
       ScaffoldMessenger.of(context).showSnackBar(
@@ -225,17 +231,10 @@ class _DataTableWidgetState extends State<DataTableWidget> {
     });
 
     try {
-      print('Loading table data...');
-      print('Parser curves count: ${widget.parser.curves.length}');
-      print(
-        'Parser start/end data records: ${widget.parser.startDataRec}/${widget.parser.endDataRec}',
-      );
-      print(
-        'Parser data format spec frame size: ${widget.parser.dataFormatSpec.dataFrameSize}',
-      );
+      // Loading table data (silent)
 
       columnNames = widget.parser.getColumnNames();
-      print('Column names: $columnNames');
+      // Column names loaded
 
       if (columnNames.isEmpty) {
         setState(() {
@@ -247,7 +246,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       }
 
       final data = await widget.parser.getTableData(maxRows: maxRows);
-      print('Retrieved ${data.length} rows of data');
+      // Retrieved ${data.length} rows of data
 
       setState(() {
         tableData = data;
@@ -261,7 +260,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
         });
       }
     } catch (e) {
-      print('Error loading table data: $e');
+      // Error loading table data: $e
       setState(() {
         errorMessage = 'Error loading data: $e';
         isLoading = false;
@@ -364,10 +363,10 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       );
 
       if (!success) {
-        print('Failed to update parser data for $columnName');
+        // Failed to update parser data for $columnName
       }
     } catch (e) {
-      print('Error updating parser data: $e');
+      // Error updating parser data: $e
     }
   }
 
@@ -425,11 +424,10 @@ class _DataTableWidgetState extends State<DataTableWidget> {
     );
 
     try {
-      print('=== SAVE BUTTON CLICKED ===');
-      print('Number of pending changes: ${widget.parser.pendingChangesCount}');
+      // Save initiated
 
       final success = await widget.parser.savePendingChanges();
-      print('Save result: $success');
+      // Save result: $success
 
       Navigator.of(context).pop(); // Close loading dialog
 
@@ -676,31 +674,79 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                   headingRowColor: WidgetStateProperty.all(
                     Theme.of(context).colorScheme.surfaceContainerHighest,
                   ),
-                  columns: columnNames.map((name) {
-                    return DataColumn(
-                      label: Text(
-                        name,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                  columns: [
+                    // Đưa cột nút xóa lên đầu
+                    const DataColumn(
+                      label: Icon(Icons.delete, color: Colors.red, size: 18),
+                    ),
+                    ...columnNames.map(
+                      (name) => DataColumn(
+                        label: Text(
+                          name,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
                       ),
-                    );
-                  }).toList(),
+                    ),
+                  ],
                   rows: currentPageData.asMap().entries.map((entry) {
                     final rowIndex = entry.key;
                     final row = entry.value;
 
-                    return DataRow(
-                      cells: columnNames.map((columnName) {
-                        final value = row[columnName] ?? 'N/A';
-                        final cellKey = '${rowIndex}_$columnName';
-                        final isEditing = editingCellKey == cellKey;
-                        final isModified = _isCellModified(
-                          rowIndex,
-                          columnName,
-                        );
+                    // Tạo danh sách cell dữ liệu cho từng dòng, bắt đầu với nút xóa
+                    final cells = <DataCell>[
+                      DataCell(
+                        IconButton(
+                          icon: Icon(Icons.delete, color: Colors.red, size: 18),
+                          tooltip: 'Xóa dòng',
+                          onPressed: () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Xác nhận xóa dòng'),
+                                content: const Text(
+                                  'Bạn có chắc chắn muốn xóa dòng này?',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(ctx).pop(false),
+                                    child: const Text('Hủy'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(ctx).pop(true),
+                                    child: const Text(
+                                      'Xóa',
+                                      style: TextStyle(color: Colors.red),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirm == true) {
+                              setState(() {
+                                tableData.removeAt(rowIndex);
+                              });
+                              widget.parser.markRowDeleted(rowIndex);
+                            }
+                          },
+                        ),
+                      ),
+                    ];
+                    for (final columnName in columnNames) {
+                      final value = row[columnName] ?? 'N/A';
+                      final cellKey = '${rowIndex}_$columnName';
+                      final isEditing = editingCellKey == cellKey;
+                      final isModified = _isCellModified(rowIndex, columnName);
+                      final canEdit =
+                          isEditMode &&
+                          columnName != 'DEPTH' &&
+                          value != 'NULL' &&
+                          value != 'N/A';
 
-                        // Check if this is an array value with metadata
-                        if (value is Map && value['isArray'] == true) {
-                          return DataCell(
+                      if (value is Map && value['isArray'] == true) {
+                        cells.add(
+                          DataCell(
                             InkWell(
                               onTap: () => _showWaveformDialog(
                                 context,
@@ -748,19 +794,11 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                                 ),
                               ),
                             ),
-                          );
-                        }
-
-                        // Regular single value - with editing support
-                        final canEdit =
-                            isEditMode &&
-                            columnName != 'DEPTH' &&
-                            value != 'NULL' &&
-                            value != 'N/A';
-
-                        if (isEditing) {
-                          // Show TextField for editing
-                          return DataCell(
+                          ),
+                        );
+                      } else if (isEditing) {
+                        cells.add(
+                          DataCell(
                             Container(
                               width: 120,
                               child: TextField(
@@ -811,85 +849,90 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                                     _saveEdit(rowIndex, columnName),
                               ),
                             ),
-                          );
-                        }
-
-                        // Normal display mode
-                        return DataCell(
-                          InkWell(
-                            onTap: canEdit
-                                ? () => _startEditing(
-                                    rowIndex,
-                                    columnName,
-                                    value.toString(),
-                                  )
-                                : null,
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 8,
-                                horizontal: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isModified
-                                    ? Colors.orange.withOpacity(0.1)
-                                    : canEdit
-                                    ? Theme.of(context)
-                                          .colorScheme
-                                          .surfaceContainer
-                                          .withOpacity(0.5)
-                                    : null,
-                                borderRadius: BorderRadius.circular(4),
-                                border: canEdit
-                                    ? Border.all(
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.outline.withOpacity(0.3),
-                                        width: 1,
-                                      )
-                                    : null,
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
+                          ),
+                        );
+                      } else {
+                        cells.add(
+                          DataCell(
+                            InkWell(
+                              onTap: canEdit
+                                  ? () => _startEditing(
+                                      rowIndex,
+                                      columnName,
                                       value.toString(),
-                                      style: TextStyle(
-                                        fontFamily: 'monospace',
-                                        color: value == 'NULL' || value == 'N/A'
-                                            ? Theme.of(
-                                                context,
-                                              ).colorScheme.outline
-                                            : isModified
-                                            ? Colors.orange.shade800
-                                            : null,
-                                        fontWeight: isModified
-                                            ? FontWeight.bold
-                                            : null,
+                                    )
+                                  : null,
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                  horizontal: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isModified
+                                      ? Colors.orange.withOpacity(0.1)
+                                      : canEdit
+                                      ? Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainer
+                                            .withOpacity(0.5)
+                                      : null,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: canEdit
+                                      ? Border.all(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outline
+                                              .withOpacity(0.3),
+                                          width: 1,
+                                        )
+                                      : null,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        value.toString(),
+                                        style: TextStyle(
+                                          fontFamily: 'monospace',
+                                          color:
+                                              value == 'NULL' || value == 'N/A'
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.outline
+                                              : isModified
+                                              ? Colors.orange.shade800
+                                              : null,
+                                          fontWeight: isModified
+                                              ? FontWeight.bold
+                                              : null,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  if (canEdit)
-                                    Icon(
-                                      Icons.edit,
-                                      size: 12,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.outline,
-                                    ),
-                                  if (isModified)
-                                    Icon(
-                                      Icons.circle,
-                                      size: 8,
-                                      color: Colors.orange,
-                                    ),
-                                ],
+                                    if (canEdit)
+                                      Icon(
+                                        Icons.edit,
+                                        size: 12,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.outline,
+                                      ),
+                                    if (isModified)
+                                      Icon(
+                                        Icons.circle,
+                                        size: 8,
+                                        color: Colors.orange,
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         );
-                      }).toList(),
-                    );
+                      }
+                    }
+
+                    return DataRow(cells: cells);
                   }).toList(),
                 ),
               ),

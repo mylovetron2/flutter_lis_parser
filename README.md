@@ -90,6 +90,97 @@ The parser supports all standard LIS representation codes:
 ### Depth Units
 Supported depth measurement units: Feet, CM, M, MM, HMM, 0.1 Inches
 
-## License
+## Phân tích hàm getColumnNames trong parser
 
-This project is based on the original C++ LIS file parser implementation, converted to Flutter for modern cross-platform support.
+Hàm `getColumnNames` trong parser luôn thêm `'DEPTH'` vào đầu danh sách cột, sau đó mới thêm các mnemonic từ `datumBlocks` (ví dụ: DEPT, TIME, SPEE, ...).
+
+**Phân tích chi tiết:**
+- Đầu tiên, hàm này tạo một danh sách rỗng `columns`.
+- Sau đó, luôn thêm `'DEPTH'` vào đầu tiên:
+  ```dart
+  columns.add('DEPTH');
+  ```
+- Tiếp theo, lặp qua từng `datum` trong `datumBlocks` và thêm `datum.mnemonic` vào danh sách:
+  ```dart
+  for (var datum in datumBlocks) {
+    columns.add(datum.mnemonic);
+  }
+  ```
+- Kết quả: danh sách cột luôn bắt đầu bằng `'DEPTH'`, tiếp theo là các mnemonic thực tế của file LIS (DEPT, TIME, ...).
+
+**Ý nghĩa:**
+- `'DEPTH'` là cột hiển thị độ sâu đã được chuẩn hóa/met, dùng cho UI và merge.
+- Các mnemonic (DEPT, TIME, ...) là các cột dữ liệu gốc của file LIS.
+
+Nếu muốn thay đổi thứ tự hoặc loại bỏ `'DEPTH'`, chỉ cần chỉnh lại hàm này trong parser.
+
+## Phân tích cách lấy giá trị cột đầu tiên (không phải mnemonic)
+
+Trong parser, cột đầu tiên luôn là `'DEPTH'` (do hàm `getColumnNames` thêm vào đầu danh sách).
+- `'DEPTH'` không phải là mnemonic thực tế trong file LIS, mà là giá trị độ sâu đã được chuẩn hóa/met, dùng cho UI và các thao tác merge.
+
+**Cách lấy giá trị cột đầu tiên:**
+1. Khi lấy danh sách cột từ `getColumnNames()`, phần tử đầu tiên luôn là `'DEPTH'`.
+2. Khi truy cập dữ liệu từng dòng, giá trị của cột `'DEPTH'` thường được tính toán từ thông tin độ sâu của record, không lấy trực tiếp từ `datumBlocks`.
+3. Các cột tiếp theo (DEPT, TIME, ...) mới là các mnemonic thực tế của file LIS.
+
+**Ví dụ truy cập:**
+```dart
+final columns = parser.getColumnNames();
+final firstCol = columns[0]; // luôn là 'DEPTH'
+final value = row[firstCol]; // giá trị độ sâu đã chuẩn hóa/met
+```
+
+### Chi tiết về cách lấy giá trị cột 'DEPTH'
+
+- Khi truy cập dữ liệu từng dòng (record), giá trị của cột `'DEPTH'` không lấy trực tiếp từ `datumBlocks` hay từ mnemonic gốc (ví dụ: DEPT), mà được tính toán lại dựa trên thông tin độ sâu của record và các thông số như hướng đo (direction), bước sâu (frameSpacing), đơn vị (depthUnit), v.v.
+- Cụ thể, parser sẽ lấy địa chỉ, độ dài, số frame, và giá trị độ sâu gốc của record, sau đó tính toán lại độ sâu cho từng frame theo công thức chuẩn hóa/met.
+- Điều này giúp đảm bảo giá trị `'DEPTH'` luôn nhất quán, đúng đơn vị, và phù hợp cho việc hiển thị, so sánh, hoặc merge với dữ liệu TXT.
+- Các cột mnemonic như DEPT, TIME, SPEE... mới lấy giá trị trực tiếp từ dữ liệu gốc của file LIS thông qua `datumBlocks`.
+
+**Ví dụ (giả lập):**
+```dart
+for (int frame = 0; frame < frameNum; frame++) {
+  double frameDepth = startingDepth;
+  if (direction == LisConstants.dirDown) {
+    frameDepth += frame * (step / 1000.0);
+  } else {
+    frameDepth -= frame * (step / 1000.0);
+  }
+  row['DEPTH'] = frameDepth.toStringAsFixed(3);
+  // ... lấy các giá trị mnemonic khác từ datumBlocks
+}
+```
+
+#### Ví dụ chi tiết về cách tính giá trị cột 'DEPTH'
+
+Giả sử một record có độ sâu bắt đầu là 700.0m, hướng đo là xuống (direction = down), bước sâu mỗi frame là 0.5m, và có 3 frame:
+
+```dart
+final startingDepth = 700.0;
+final frameSpacing = 0.5; // mét
+final direction = LisConstants.dirDown;
+final frameNum = 3;
+
+for (int frame = 0; frame < frameNum; frame++) {
+  double frameDepth;
+  if (direction == LisConstants.dirDown) {
+    frameDepth = startingDepth + frame * frameSpacing;
+  } else {
+    frameDepth = startingDepth - frame * frameSpacing;
+  }
+  print('Frame $frame: DEPTH = ${frameDepth.toStringAsFixed(3)} m');
+}
+```
+
+**Kết quả in ra:**
+```
+Frame 0: DEPTH = 700.000 m
+Frame 1: DEPTH = 700.500 m
+Frame 2: DEPTH = 701.000 m
+```
+
+Như vậy, giá trị `'DEPTH'` cho từng dòng sẽ được tính toán lại dựa trên thông tin record và các thông số đo, không lấy trực tiếp từ dữ liệu gốc (mnemonic DEPT).
+
+**Kết luận:**
+- `'DEPTH'` là giá trị đã được tính toán lại, không lấy trực tiếp từ dữ liệu gốc, giúp chuẩn hóa và đồng bộ dữ liệu cho các thao tác xử lý và hiển thị.

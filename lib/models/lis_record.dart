@@ -50,6 +50,23 @@ class LisRecord {
   bool get isWellInfoRecord => type == 34;
   bool get isDataFormatSpecRecord => type == 64;
 
+  // Chuyển LisRecord thành mảng bytes (giả định, cần chỉnh lại đúng format thực tế nếu cần)
+  List<int> toBytes() {
+    final bytes = <int>[];
+    bytes.addAll(_int32ToBytesLE(type));
+    bytes.addAll(_int32ToBytesLE(addr));
+    bytes.addAll(_int32ToBytesLE(length));
+    // Nếu có các trường dữ liệu khác, bổ sung vào đây
+    return bytes;
+  }
+
+  List<int> _int32ToBytesLE(int value) => [
+    value & 0xFF,
+    (value >> 8) & 0xFF,
+    (value >> 16) & 0xFF,
+    (value >> 24) & 0xFF,
+  ];
+
   @override
   String toString() {
     return 'LisRecord(type: $type, name: $name, addr: $addr, length: $length)';
