@@ -79,18 +79,30 @@ class CodeReader {
 
   static double _readDepthUnit(Uint8List entry, int size) {
     final chars = List.generate(size, (i) => entry[i]);
-    String unit = String.fromCharCodes(chars).trim();
+    String unit = String.fromCharCodes(chars).trim().toUpperCase();
 
+    // Accept a few common variants used in LIS headers
     switch (unit) {
       case 'CM':
+      case 'CMS':
         return LisConstants.depthUnitCm.toDouble();
       case '.5MM':
+      case '0.5MM':
         return LisConstants.depthUnitHmm.toDouble();
       case 'MM':
+      case 'MMS':
         return LisConstants.depthUnitMm.toDouble();
       case 'M':
+      case 'METRE':
+      case 'METERS':
+      case 'METRE(S)':
         return LisConstants.depthUnitM.toDouble();
+      case 'FT':
+      case 'FEET':
+      case "'":
+        return LisConstants.depthUnitFeet.toDouble();
       case '.1IN':
+      case '0.1IN':
         return LisConstants.depthUnitP1in.toDouble();
       default:
         return LisConstants.depthUnitUnknown.toDouble();

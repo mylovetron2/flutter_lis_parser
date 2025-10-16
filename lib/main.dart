@@ -13,7 +13,9 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'LIS File Parser',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF283593), // Blue navy ấm hơn
+        ),
         useMaterial3: true,
         cardTheme: const CardThemeData(elevation: 2),
       ),

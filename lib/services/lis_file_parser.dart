@@ -1040,7 +1040,8 @@ class LisFileParser {
   double _convertToMeter(double depth, int unit) {
     switch (unit) {
       case LisConstants.depthUnitFeet:
-        return depth; // Assuming already in proper unit
+        // Convert feet to meters
+        return depth * 0.3048;
       case LisConstants.depthUnitCm:
         return depth / 100.0;
       case LisConstants.depthUnitM:
@@ -1048,8 +1049,10 @@ class LisFileParser {
       case LisConstants.depthUnitMm:
         return depth / 1000.0;
       case LisConstants.depthUnitHmm:
+        // .5MM representation: half-millimeter -> convert to meters
         return depth / 2000.0;
       case LisConstants.depthUnitP1in:
+        // 0.1 inch -> meter conversion: 0.1 in = 0.00254 m
         return depth * 0.00254;
       default:
         return depth;

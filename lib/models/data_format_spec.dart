@@ -78,6 +78,8 @@ class DataFormatSpec {
         return 'MM';
       case 5:
         return 'HMM';
+      case 6:
+        return 'Unknown';
       case 7:
         return '0.1 IN';
       default:
