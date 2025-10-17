@@ -41,13 +41,19 @@ class BlankRecord {
   }
 
   // Chuyển BlankRecord thành mảng bytes (giả định 16 bytes, cần chỉnh lại đúng format thực tế nếu cần)
+  // Ghi đúng format: prevAddr (4 bytes LE), addr (4 bytes LE), nextAddr (4 bytes LE), nextRecLen (2 bytes BE), 1 byte padding, num (1 byte)
   List<int> toBytes() {
     final bytes = <int>[];
     bytes.addAll(_int32ToBytesLE(prevAddr));
     bytes.addAll(_int32ToBytesLE(addr));
     bytes.addAll(_int32ToBytesLE(nextAddr));
-    bytes.addAll(_int32ToBytesLE(nextRecLen));
-    // Nếu có trường num hoặc các trường khác, bổ sung vào đây
+    // nextRecLen: 2 bytes big endian
+    bytes.add((nextRecLen >> 8) & 0xFF);
+    bytes.add(nextRecLen & 0xFF);
+    // 1 byte padding (thường là 0)
+    bytes.add(0);
+    // num: 1 byte cuối cùng
+    bytes.add(num & 0xFF);
     return bytes;
   }
 

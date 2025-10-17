@@ -96,10 +96,14 @@ class LisFileParser {
       int addr = 0;
       for (int i = 0; i < newLisRecords.length; i++) {
         final r = newLisRecords[i];
-        final prevAddr = i == 0 ? 0 : addr;
+        final prevAddr = i == 0 ? 0 : newBlankRecords[i - 1].addr;
         final nextAddr = addr + r.length + 16; // 16 bytes header
         final nextRecLen = r.length + 16;
-        final num = 0; // giữ nguyên hoặc cập nhật nếu cần
+        // Lấy num từ record gốc nếu có, hoặc 0
+        int num = 0;
+        if (i < blankRecords.length) {
+          num = blankRecords[i].num;
+        }
         final blank = BlankRecord(
           prevAddr: prevAddr,
           addr: addr,
@@ -1437,7 +1441,7 @@ class LisFileParser {
         }
         print('Total expected size from datum blocks: $totalExpectedSize');
         print(
-          'Expected per frame: ${totalExpectedSize}/${frameNum} = ${totalExpectedSize / frameNum}',
+          'Expected per frame: $totalExpectedSize/$frameNum = ${totalExpectedSize / frameNum}',
         );
 
         for (int frame = 0; frame < frameNum; frame++) {
@@ -1969,7 +1973,7 @@ class LisFileParser {
       }
 
       // Store the change for later file writing
-      final changeKey = '${actualRecordIndex}_${frameIndex}_${columnName}';
+      final changeKey = '${actualRecordIndex}_${frameIndex}_$columnName';
       // DEBUG: In ra index, frame, value trước khi push vào pending changes
       print(
         '[DEBUG][PENDING][BEFORE] recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, newValue=$newValue, oldValue=${allData[currentIndex]}, changeKey=$changeKey',
@@ -2039,10 +2043,8 @@ class LisFileParser {
       // Tạo đường dẫn file mới để lưu (không ghi đè file gốc)
       final extIndex = fileName.lastIndexOf('.');
       final newFileName = extIndex > 0
-          ? fileName.substring(0, extIndex) +
-                '_modified' +
-                fileName.substring(extIndex)
-          : fileName + '_modified';
+          ? '${fileName.substring(0, extIndex)}_modified${fileName.substring(extIndex)}'
+          : '${fileName}_modified';
       print('Lưu thay đổi vào file mới: $newFileName');
 
       // Read entire file into memory
