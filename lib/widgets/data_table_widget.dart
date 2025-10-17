@@ -32,6 +32,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
   @override
   void initState() {
+    print('DEBUG INITSTATE: DataTableWidget khởi động');
     super.initState();
     _loadTableData();
   }
@@ -147,11 +148,18 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       // debug: TXT timeToDepth mapping computed
       // Merge vào tableData
       int matchCount = 0;
+      final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPTH';
+      // Lấy số frame/record động từ parser
+      int framesPerRecord = 1;
+      if (widget.parser.startDataRec >= 0 &&
+          widget.parser.endDataRec >= widget.parser.startDataRec) {
+        framesPerRecord = widget.parser.getFrameNum(widget.parser.startDataRec);
+        if (framesPerRecord <= 0) framesPerRecord = 1;
+      }
       for (int i = tableData.length - 1; i >= 0; --i) {
         final row = tableData[i];
         final rawTime = row['TIME'];
         if (rawTime == null) {
-          // debug: Row $i: TIME is null, skipping
           continue;
         }
         double? timeNum;
@@ -161,35 +169,31 @@ class _DataTableWidgetState extends State<DataTableWidget> {
           timeNum = double.tryParse(rawTime.toString());
         }
         if (timeNum == null) {
-          // debug: Row $i: TIME "$rawTime" is not a number, skipping
           continue;
         }
         final timeVal = (timeNum / 1000).toString();
         if (timeToDepth.containsKey(timeVal)) {
           final newDepth = timeToDepth[timeVal];
-          // debug: Row $i: TIME(LIS)=$rawTime / 1000 = $timeVal, DEPTH(TXT)=$newDepth
-          if (newDepth != null && newDepth != row['DEPTH']?.toString()) {
+          if (newDepth != null && newDepth != row[targetCol]?.toString()) {
             setState(() {
-              tableData[i]['DEPTH'] = newDepth;
-              modifiedValues['${i}_DEPTH'] = newDepth;
+              tableData[i][targetCol] = newDepth;
+              modifiedValues['${i}_$targetCol'] = newDepth;
             });
-            // Ghi thay đổi vào pending changes của parser
-            final lisDepthCol = widget.parser.firstColumnName;
-            // debug: MERGE Row $i updateDataValue
+            // Tính lại recordIndex và frameIndex đúng như _updateParserData
+            final recordIndex = i ~/ framesPerRecord;
+            final frameIndex = i % framesPerRecord;
             await widget.parser.updateDataValue(
-              recordIndex: i,
-              frameIndex: 0,
-              columnName: lisDepthCol,
+              recordIndex: recordIndex,
+              frameIndex: frameIndex,
+              columnName: targetCol,
               newValue: double.tryParse(newDepth) ?? 0.0,
             );
             matchCount++;
           }
         } else {
-          // debug: Row $i: no match in TXT => remove row
           setState(() {
             tableData.removeAt(i);
           });
-          // Notify parser of row deletion
           widget.parser.markRowDeleted(i);
         }
       }
@@ -348,12 +352,16 @@ class _DataTableWidgetState extends State<DataTableWidget> {
     double newValue,
   ) async {
     try {
-      // Calculate frame index from row data
-      // This is a simplified approach - in reality, you'd need to map depth to record/frame more precisely
-      final recordIndex =
-          rowIndex ~/
-          14; // Assuming 14 frames per record based on previous logs
-      final frameIndex = rowIndex % 14;
+      // Lấy số frame/record động từ parser
+      int framesPerRecord = 1;
+      if (widget.parser.startDataRec >= 0 &&
+          widget.parser.endDataRec >= widget.parser.startDataRec) {
+        // Lấy frameNum của record đầu tiên (giả định các record có cùng số frame)
+        framesPerRecord = widget.parser.getFrameNum(widget.parser.startDataRec);
+        if (framesPerRecord <= 0) framesPerRecord = 1;
+      }
+      final recordIndex = rowIndex ~/ framesPerRecord;
+      final frameIndex = rowIndex % framesPerRecord;
 
       final success = await widget.parser.updateDataValue(
         recordIndex: recordIndex,

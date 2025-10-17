@@ -11,9 +11,7 @@ import '../models/data_format_spec.dart';
 import '../constants/lis_constants.dart';
 import 'code_reader.dart';
 
-// Silence debug prints in this file by shadowing the top-level print function.
-// This keeps the original code intact but prevents console output from debug prints.
-void print(Object? object) {}
+// Đã bỏ shadow print để log debug xuất hiện trong terminal
 
 class LisFileParser {
   /// Returns the mnemonic (column name) of the first datum in the LIS file, or empty string if not available
@@ -1852,8 +1850,9 @@ class LisFileParser {
 
       // Store the change for later file writing
       final changeKey = '${actualRecordIndex}_${frameIndex}_${columnName}';
+      // DEBUG: In ra index, frame, value trước khi push vào pending changes
       print(
-        '[updateDataValue] Storing change: recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, column=$columnName, dataIndex=$currentIndex, oldValue=${allData[currentIndex]}, newValue=$newValue, changeKey=$changeKey',
+        '[DEBUG][PENDING][BEFORE] recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, newValue=$newValue, oldValue=${allData[currentIndex]}, changeKey=$changeKey',
       );
       if (!_pendingChanges.containsKey(changeKey)) {
         _pendingChanges[changeKey] = {
@@ -1865,19 +1864,21 @@ class LisFileParser {
           'newValue': newValue,
           'datum': datum,
         };
-
         print(
           '[updateDataValue] Stored pending change: $changeKey = $newValue (was ${allData[currentIndex]})',
         );
-        return true;
       } else {
         // Update existing pending change
         _pendingChanges[changeKey]!['newValue'] = newValue;
         print(
           '[updateDataValue] Updated pending change: $changeKey = $newValue',
         );
-        return true;
       }
+      // DEBUG: In ra index, frame, value sau khi push vào pending changes
+      print(
+        '[DEBUG][PENDING][AFTER] recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, newValue=${_pendingChanges[changeKey]!['newValue']}, changeKey=$changeKey',
+      );
+      return true;
     } catch (e) {
       print('[updateDataValue] Error updating data value: $e');
       return false;
@@ -1898,6 +1899,7 @@ class LisFileParser {
 
   // Method to save all pending changes to the actual LIS file
   Future<bool> savePendingChanges() async {
+    print('DEBUG TEST: savePendingChanges called');
     print('');
     print('========================================');
     print('SAVE PENDING CHANGES CALLED!');
@@ -1936,8 +1938,9 @@ class LisFileParser {
         final newValue = change['newValue'] as double;
         final datum = change['datum'] as DatumSpecBlock;
         final oldValue = change['oldValue'];
+        // DEBUG: In ra index, frame, value trước khi lưu file
         print(
-          '[savePendingChanges] Applying change: recordIndex=$actualRecordIndex, frameIndex=$frameIndex, column=${datum.mnemonic}, oldValue=$oldValue, newValue=$newValue',
+          '[DEBUG][SAVE][BEFORE] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, oldValue=$oldValue, column=${datum.mnemonic}',
         );
         // Calculate the byte position in the file and update in memory
         final success = _updateBytesInMemory(
@@ -1947,7 +1950,10 @@ class LisFileParser {
           datum,
           newValue,
         );
-
+        // DEBUG: In ra index, frame, value sau khi lưu file
+        print(
+          '[DEBUG][SAVE][AFTER] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, column=${datum.mnemonic}, success=$success',
+        );
         if (!success) {
           print('[savePendingChanges] Failed to update change for $entry');
           // Continue with other changes rather than failing completely
