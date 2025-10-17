@@ -14,6 +14,126 @@ import 'code_reader.dart';
 // Đã bỏ shadow print để log debug xuất hiện trong terminal
 
 class LisFileParser {
+  /// Kiểm tra và in ra các chỉ số, địa chỉ, liên kết giữa các record trong file LIS mới
+  Future<void> validateNewLISFile(String newFileName) async {
+    try {
+      final bytes = await File(newFileName).readAsBytes();
+      int pos = 0;
+      int recordIdx = 0;
+      print('--- Kiểm tra file LIS mới: $newFileName ---');
+      while (pos + 16 < bytes.length) {
+        // Đọc blank record header
+        final blankBytes = bytes.sublist(pos, pos + 16);
+        final prevAddr =
+            blankBytes[0] +
+            blankBytes[1] * 256 +
+            blankBytes[2] * 65536 +
+            blankBytes[3] * 16777216;
+        final addr =
+            blankBytes[4] +
+            blankBytes[5] * 256 +
+            blankBytes[6] * 65536 +
+            blankBytes[7] * 16777216;
+        final nextAddr =
+            blankBytes[8] +
+            blankBytes[9] * 256 +
+            blankBytes[10] * 65536 +
+            blankBytes[11] * 16777216;
+        final nextRecLen = blankBytes[13] + blankBytes[12] * 256;
+        final num = blankBytes[15];
+        print(
+          'Record $recordIdx: prevAddr=$prevAddr, addr=$addr, nextAddr=$nextAddr, nextRecLen=$nextRecLen, num=$num',
+        );
+        // Kiểm tra liên kết
+        if (addr != pos) {
+          print('  LỖI: addr != pos ($addr != $pos)');
+        }
+        if (nextAddr != 0 && nextAddr != pos + nextRecLen) {
+          print(
+            '  LỖI: nextAddr != pos + nextRecLen ($nextAddr != ${pos + nextRecLen})',
+          );
+        }
+        pos += nextRecLen;
+        recordIdx++;
+      }
+      print('--- Kết thúc kiểm tra file LIS mới ---');
+    } catch (e) {
+      print('Lỗi kiểm tra file LIS mới: $e');
+    }
+  }
+
+  /// Tạo file LIS mới chỉ với các record không bị xóa (type=0), giữ nguyên các record header, trailer, info...
+  Future<bool> saveLISWithDeletedRecords(String newFileName) async {
+    try {
+      // Xác định các data record bị xóa
+      final deletedRows = _pendingChanges.entries
+          .where((e) => e.value['type'] == 'delete')
+          .map((e) => e.value['rowIndex'] as int)
+          .toSet();
+
+      // Tạo danh sách record mới: giữ nguyên các record không phải type=0, với type=0 thì chỉ giữ lại các record không bị xóa
+      final newLisRecords = <LisRecord>[];
+      for (int i = 0; i < lisRecords.length; i++) {
+        final r = lisRecords[i];
+        if (r.type == 0) {
+          // Data record
+          final dataIdx = i - startDataRec;
+          if (!deletedRows.contains(dataIdx)) {
+            newLisRecords.add(r);
+          } else {
+            print(
+              'DEBUG: Loại bỏ data record tại index $i (dataIdx=$dataIdx) do bị đánh dấu xóa',
+            );
+          }
+        } else {
+          // Header/trailer/info record giữ nguyên
+          newLisRecords.add(r);
+        }
+      }
+
+      // Tạo lại danh sách blankRecords cho đúng liên kết
+      final newBlankRecords = <BlankRecord>[];
+      int addr = 0;
+      for (int i = 0; i < newLisRecords.length; i++) {
+        final r = newLisRecords[i];
+        final prevAddr = i == 0 ? 0 : addr;
+        final nextAddr = addr + r.length + 16; // 16 bytes header
+        final nextRecLen = r.length + 16;
+        final num = 0; // giữ nguyên hoặc cập nhật nếu cần
+        final blank = BlankRecord(
+          prevAddr: prevAddr,
+          addr: addr,
+          nextAddr: i < newLisRecords.length - 1 ? nextAddr : 0,
+          nextRecLen: nextRecLen,
+          num: num,
+        );
+        newBlankRecords.add(blank);
+        addr = nextAddr;
+      }
+
+      // Tạo mảng bytes cho file mới
+      final bytes = <int>[];
+      for (int i = 0; i < newLisRecords.length; i++) {
+        // Ghi blank record header
+        bytes.addAll(newBlankRecords[i].toBytes());
+        // Ghi data record
+        // Đọc dữ liệu record từ file gốc
+        final r = newLisRecords[i];
+        await file!.setPosition(r.addr);
+        final data = await file!.read(r.length);
+        bytes.addAll(data);
+      }
+
+      // Ghi ra file mới
+      await File(newFileName).writeAsBytes(bytes);
+      print('Đã ghi file LIS mới với các record không bị xóa: $newFileName');
+      return true;
+    } catch (e) {
+      print('Lỗi khi ghi file LIS mới: $e');
+      return false;
+    }
+  }
+
   /// Returns the mnemonic (column name) of the first datum in the LIS file, or empty string if not available
   String get firstColumnName =>
       datumBlocks.isNotEmpty ? datumBlocks.first.mnemonic : '';
@@ -1929,7 +2049,27 @@ class LisFileParser {
       final originalBytes = await File(fileName).readAsBytes();
       final modifiedBytes = Uint8List.fromList(originalBytes);
 
-      // Now apply all non-delete pending changes
+      // Xác định các dòng bị đánh dấu xóa
+      final deletedRows = _pendingChanges.entries
+          .where((e) => e.value['type'] == 'delete')
+          .map((e) => e.value['rowIndex'] as int)
+          .toSet();
+
+      // Lấy danh sách các data records
+      final dataRecords = lisRecords.where((r) => r.type == 0).toList();
+      print('DEBUG: Có ${dataRecords.length} data records');
+
+      // Tạo danh sách các record cần giữ lại (không bị xóa)
+      final recordsToKeep = <LisRecord>[];
+      for (int i = 0; i < dataRecords.length; i++) {
+        if (!deletedRows.contains(i)) {
+          recordsToKeep.add(dataRecords[i]);
+        } else {
+          print('DEBUG: Loại bỏ data record tại index $i do bị đánh dấu xóa');
+        }
+      }
+
+      // Áp dụng các thay đổi cập nhật giá trị cho các record còn lại
       for (final entry in _pendingChanges.entries) {
         final change = entry.value;
         if (change['type'] == 'delete') continue;
@@ -1938,11 +2078,13 @@ class LisFileParser {
         final newValue = change['newValue'] as double;
         final datum = change['datum'] as DatumSpecBlock;
         final oldValue = change['oldValue'];
+        // Nếu record này bị xóa thì bỏ qua
+        final dataRecordIdx = actualRecordIndex - startDataRec;
+        if (deletedRows.contains(dataRecordIdx)) continue;
         // DEBUG: In ra index, frame, value trước khi lưu file
         print(
           '[DEBUG][SAVE][BEFORE] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, oldValue=$oldValue, column=${datum.mnemonic}',
         );
-        // Calculate the byte position in the file and update in memory
         final success = _updateBytesInMemory(
           modifiedBytes,
           actualRecordIndex,
@@ -1950,24 +2092,24 @@ class LisFileParser {
           datum,
           newValue,
         );
-        // DEBUG: In ra index, frame, value sau khi lưu file
         print(
           '[DEBUG][SAVE][AFTER] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, column=${datum.mnemonic}, success=$success',
         );
         if (!success) {
           print('[savePendingChanges] Failed to update change for $entry');
-          // Continue with other changes rather than failing completely
         }
       }
+
+      // TODO: Loại bỏ thực sự các record bị xóa khỏi file (cần xử lý lại cấu trúc file LIS)
+      // Hiện tại chỉ loại khỏi danh sách, chưa ghi lại file mới với record bị loại bỏ
+      // Nếu cần ghi lại file với các record bị loại bỏ, cần tái cấu trúc file và cập nhật lại các chỉ số record
 
       // Write the modified bytes back to file
       print('Modified bytes length: ${modifiedBytes.length} bytes');
 
-      // Ghi dữ liệu đã chỉnh sửa ra file mới (không ghi đè file gốc)
       await File(newFileName).writeAsBytes(modifiedBytes);
       print('DEBUG: Written modified bytes to new file');
 
-      // Mở lại file handle tới file mới
       file = await File(newFileName).open(mode: FileMode.read);
       final newFileSize = await File(newFileName).length();
       print('New file size after write: $newFileSize bytes');
@@ -1979,7 +2121,6 @@ class LisFileParser {
       print('');
       _pendingChanges.clear();
 
-      // Đóng file và clear buffer sau khi đã ghi xong
       await closeLisFile();
       return true;
     } catch (e) {
