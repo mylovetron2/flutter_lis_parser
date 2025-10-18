@@ -9,11 +9,15 @@ import '../models/datum_spec_block.dart';
 import '../models/well_info_block.dart';
 import '../models/data_format_spec.dart';
 import '../constants/lis_constants.dart';
+import '../models/file_header_record.dart';
 import 'code_reader.dart';
 
 // Đã bỏ shadow print để log debug xuất hiện trong terminal
 
 class LisFileParser {
+  // Danh sách các File Header Record đã parse
+  final List<FileHeaderRecord> fileHeaderRecords = [];
+
   /// Kiểm tra và in ra các chỉ số, địa chỉ, liên kết giữa các record trong file LIS mới
   Future<void> validateNewLISFile(String newFileName) async {
     try {
@@ -480,6 +484,70 @@ class LisFileParser {
               );
 
               lisRecords.add(lisRecord);
+
+              // Nếu là File Header Record (type 128) thì parse và lưu vào fileHeaderRecords
+              if (type == 128) {
+                await file!.setPosition(dataPos);
+                final recordBytes = await file!.read(nextRecLength);
+                final fileName = String.fromCharCodes(
+                  recordBytes.sublist(2, 12),
+                ).trim();
+                final serviceName = String.fromCharCodes(
+                  recordBytes.sublist(12, 18),
+                ).trim();
+                final fileNumber = String.fromCharCodes(
+                  recordBytes.sublist(19, 22),
+                ).trim();
+                final serviceSubLevelName = String.fromCharCodes(
+                  recordBytes.sublist(24, 30),
+                ).trim();
+                final versionNumber = String.fromCharCodes(
+                  recordBytes.sublist(30, 38),
+                ).trim();
+                final year =
+                    int.tryParse(
+                      String.fromCharCodes(recordBytes.sublist(38, 40)).trim(),
+                    ) ??
+                    0;
+                final month =
+                    int.tryParse(
+                      String.fromCharCodes(recordBytes.sublist(41, 43)).trim(),
+                    ) ??
+                    0;
+                final day =
+                    int.tryParse(
+                      String.fromCharCodes(recordBytes.sublist(44, 46)).trim(),
+                    ) ??
+                    0;
+                final maxPhysicalRecordLength = String.fromCharCodes(
+                  recordBytes.sublist(47, 52),
+                ).trim();
+                final fileTypeStr = String.fromCharCodes(
+                  recordBytes.sublist(57, 59),
+                ).trim();
+                final previousFileName = String.fromCharCodes(
+                  recordBytes.sublist(61, 71),
+                ).trim();
+                fileHeaderRecords.add(
+                  FileHeaderRecord(
+                    address: dataPos,
+                    length: nextRecLength,
+                    logicalIndex: recordIndex,
+                    physicalIndex: 0,
+                    fileName: fileName,
+                    serviceName: serviceName,
+                    fileNumber: fileNumber,
+                    serviceSubLevelName: serviceSubLevelName,
+                    versionNumber: versionNumber,
+                    year: year,
+                    month: month,
+                    day: day,
+                    maxPhysicalRecordLength: maxPhysicalRecordLength,
+                    fileType: fileTypeStr,
+                    previousFileName: previousFileName,
+                  ),
+                );
+              }
 
               // Store important record indices
               _storeRecordIndices(type, recordName, lisRecords.length - 1);
