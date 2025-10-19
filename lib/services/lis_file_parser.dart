@@ -15,6 +15,50 @@ import 'code_reader.dart';
 // Đã bỏ shadow print để log debug xuất hiện trong terminal
 
 class LisFileParser {
+  /// Lưu DataFormatSpec hiện tại vào file LIS (ghi đè record type 64)
+  Future<bool> saveDataFormatSpecToLIS() async {
+    if (file == null || dataFSRIdx < 0 || dataFSRIdx >= lisRecords.length) {
+      print(
+        '[saveDataFormatSpecToLIS] Không tìm thấy record Data Format Spec hoặc file chưa mở',
+      );
+      return false;
+    }
+    try {
+      final lisRecord = lisRecords[dataFSRIdx];
+      await file!.setPosition(lisRecord.addr);
+      // Serialize DataFormatSpec thành bytes (giả lập: chỉ ghi các trường chính, cần chuẩn hóa lại nếu muốn đúng spec)
+      final bytes = <int>[];
+      bytes.addAll([dataFormatSpec.dataRecordType]);
+      bytes.addAll([dataFormatSpec.datumSpecBlockType]);
+      bytes.addAll([dataFormatSpec.dataFrameSize]);
+      bytes.addAll([dataFormatSpec.direction]);
+      bytes.addAll([dataFormatSpec.opticalDepthUnit]);
+      bytes.addAll(_doubleToBytes(dataFormatSpec.dataRefPoint));
+      bytes.addAll([dataFormatSpec.dataRefPointUnit]);
+      bytes.addAll(_doubleToBytes(dataFormatSpec.frameSpacing));
+      bytes.addAll([dataFormatSpec.frameSpacingUnit]);
+      bytes.addAll([dataFormatSpec.maxFramesPerRecord]);
+      bytes.addAll(_doubleToBytes(dataFormatSpec.absentValue));
+      bytes.addAll([dataFormatSpec.depthRecordingMode]);
+      bytes.addAll([dataFormatSpec.depthUnit]);
+      bytes.addAll([dataFormatSpec.depthRepr]);
+      bytes.addAll([dataFormatSpec.datumSpecBlockSubType]);
+      // Ghi đè lên record type 64
+      await file!.writeFrom(Uint8List.fromList(bytes));
+      print('[saveDataFormatSpecToLIS] Đã ghi đè DataFormatSpec vào file LIS');
+      return true;
+    } catch (e) {
+      print('[saveDataFormatSpecToLIS] Lỗi khi ghi DataFormatSpec: $e');
+      return false;
+    }
+  }
+
+  List<int> _doubleToBytes(double value) {
+    final b = ByteData(8);
+    b.setFloat64(0, value, Endian.little);
+    return b.buffer.asUint8List().toList();
+  }
+
   // Danh sách các File Header Record đã parse
   final List<FileHeaderRecord> fileHeaderRecords = [];
 
