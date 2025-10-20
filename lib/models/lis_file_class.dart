@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io';
+import 'lis_record.dart';
 
 class PhysicalRecord {
   int length;
@@ -397,59 +398,50 @@ class LISFileClass {
     var file = File(strFileName);
     hFile = await file.open();
     nFileSize = await file.length();
-    int pos = 0;
     lrArr.clear();
-    while (pos < nFileSize) {
-      var group1 = await hFile!.read(4);
-      if (group1.length < 4) break;
-      int lAddr = LISMisc.convert4Bytes2Long(group1);
-      if (lAddr != 0) {
-        pos += 4;
-        continue;
-      }
-      var group2 = await hFile!.read(4);
-      if (group2.length < 4) break;
-      var group3 = await hFile!.read(4);
-      if (group3.length < 4) break;
-      var group4 = await hFile!.read(4);
-      if (group4.length < 4) break;
-      int lRecLen = LISMisc.convert4Bytes2Long(group4);
-      var typeBytes = await hFile!.read(2);
-      int nType = typeBytes[0];
-      // Đọc Physical Records trong Logical Record
-      List<PhysicalRecord> prArr = [];
-      int prPos = pos + 18; // 4*4 + 2
-      int prCount = 1; // TODO: xác định số lượng Physical Record nếu có
-      for (int i = 0; i < prCount; i++) {
-        await hFile!.setPosition(prPos);
-        var prLenBytes = await hFile!.read(4);
-        var prAddrBytes = await hFile!.read(4);
-        var prAttrBytes = await hFile!.read(2);
-        int prLen = LISMisc.convert4Bytes2Long(prLenBytes);
-        int prAddr = LISMisc.convert4Bytes2Long(prAddrBytes);
-        int attr1 = prAttrBytes[0];
-        int attr2 = prAttrBytes[1];
-        prArr.add(
-          PhysicalRecord(
-            length: prLen,
-            address: prAddr,
-            attr1: attr1,
-            attr2: attr2,
-          ),
-        );
-        prPos += 10;
-      }
+    int addr = 0;
+    int maxIterations = 10000; // Safety limit
+    int iteration = 0;
+    while (addr + 16 < nFileSize && iteration < maxIterations) {
+      await hFile!.setPosition(addr);
+      var blankHeader = await hFile!.read(16);
+      if (blankHeader.length < 16) break;
+      // Parse blank record header
+      int prevAddr =
+          blankHeader[0] +
+          blankHeader[1] * 256 +
+          blankHeader[2] * 65536 +
+          blankHeader[3] * 16777216;
+      int curAddr =
+          blankHeader[4] +
+          blankHeader[5] * 256 +
+          blankHeader[6] * 65536 +
+          blankHeader[7] * 16777216;
+      int nextAddr =
+          blankHeader[8] +
+          blankHeader[9] * 256 +
+          blankHeader[10] * 65536 +
+          blankHeader[11] * 16777216;
+      int nextRecLen = blankHeader[13] + blankHeader[12] * 256;
+      int num = blankHeader[15];
+      // Đọc data record sau header
+      int dataAddr = addr + 16;
+      await hFile!.setPosition(dataAddr);
+      var typeBytes = await hFile!.read(1);
+      int nType = typeBytes.isNotEmpty ? typeBytes[0] : 0;
+      String name = LISMisc.findLogicalRecordTypeName(nType);
       LogicalRecord lr = LogicalRecord(
-        length: lRecLen,
-        address: pos,
+        length: nextRecLen - 4, // trừ 4 bytes header cuối
+        address: dataAddr,
         type: nType,
-        physicalRecordNum: prCount,
-        prArr: prArr,
+        physicalRecordNum: 1,
+        prArr: [],
       );
       lrArr.add(lr);
       nLogicalRecordNum++;
-      pos += lRecLen;
-      await hFile!.setPosition(pos);
+      // Di chuyển đến record tiếp theo
+      addr = nextAddr;
+      iteration++;
     }
     await hFile!.close();
   }
@@ -510,5 +502,22 @@ class LISFileClass {
       ds.nTotalItemNum = data1Len + data2Len;
       // Có thể bổ sung logic giải mã dữ liệu thực tế từ file LIS bằng các hàm tiện ích
     }
+  }
+
+  // Trả về danh sách LisRecord cho UI
+  List<LisRecord> get lisRecords {
+    return lrArr
+        .map(
+          (lr) => LisRecord(
+            type: lr.type,
+            addr: lr.address,
+            length: lr.length,
+            name: LISMisc.findLogicalRecordTypeName(lr.type),
+            blockNum: lr.physicalRecordNum,
+            frameNum: 0,
+            depth: -999.25,
+          ),
+        )
+        .toList();
   }
 }
