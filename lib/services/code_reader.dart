@@ -1,6 +1,7 @@
 // CodeReader service - converted from C++ ReadCode functions
 
 import 'dart:typed_data';
+import 'dart:math' as math;
 import '../constants/lis_constants.dart';
 
 class CodeReader {
@@ -110,80 +111,61 @@ class CodeReader {
   }
 
   static double _read32BitFloat(Uint8List entry) {
-    int ch0 = entry[0];
-    int ch1 = entry[1];
-    int ch2 = entry[2];
-    int ch3 = entry[3];
+    int byte1 = entry[0];
+    int byte2 = entry[1];
+    int byte3 = entry[2];
+    int byte4 = entry[3];
 
-    int result = 0;
-    result |= (ch0 << 24);
-    result |= (ch1 << 16);
-    result |= (ch2 << 8);
-    result |= ch3;
+    int ePart = ((byte1 << 1) & 0xFF) + (byte2 >= 128 ? 1 : 0);
+    int mPart = ((byte2 << 16) | (byte3 << 8) | byte4) & 0x7FFFFF;
 
-    if (ch0 >= 128) {
-      // Negative number
-      int exponentBits = (result & 0x7f800000) >> 23;
-      double exponent;
-      if (exponentBits <= 127) {
-        exponent = 1.0;
-        for (int i = 0; i < 127 - exponentBits; i++) {
-          exponent *= 2.0;
-        }
-      } else {
-        exponent = 1.0;
-        for (int i = 0; i < exponentBits - 127; i++) {
-          exponent /= 2.0;
-        }
-      }
+    double M = 0;
+    List<double> factor = [
+      0,
+      0.5,
+      0.25,
+      0.125,
+      0.0625,
+      0.03125,
+      0.015625,
+      0.0078125,
+      0.00390625,
+      0.001953125,
+      0.0009765625,
+      0.00048828125,
+      0.000244140625,
+      0.0001220703125,
+      0.00006103515625,
+      0.000030517578125,
+      0.0000152587890625,
+      0.00000762939453125,
+      0.000003814697265625,
+      0.0000019073486328125,
+      0.00000095367431640625,
+      0.000000476837158203125,
+      0.0000002384185791015625,
+      0.00000011920928955078125,
+    ];
 
-      int fractionBits = result & 0x7fffff;
-      fractionBits = ~fractionBits;
-      fractionBits = fractionBits + 1;
-      fractionBits = fractionBits << 9;
-
-      double fraction = 0.0;
-      double factor = 0.5;
-      while (fractionBits > 0) {
-        if ((fractionBits & 0x80000000) != 0) {
-          fraction += factor;
-        }
-        factor /= 2;
-        fractionBits = fractionBits << 1;
-      }
-
-      return -1.0 * fraction * exponent;
-    } else {
-      // Positive number
-      int exponentBits = (result & 0x7f800000) >> 23;
-      double exponent;
-      if (exponentBits >= 128) {
-        exponent = 1.0;
-        for (int i = 0; i < exponentBits - 128; i++) {
-          exponent *= 2.0;
-        }
-      } else {
-        exponent = 1.0;
-        for (int i = 0; i < 128 - exponentBits; i++) {
-          exponent /= 2.0;
-        }
-      }
-
-      int fractionBits = result & 0x7fffff;
-      fractionBits = fractionBits << 9;
-
-      double fraction = 0.0;
-      double factor = 0.5;
-      while (fractionBits > 0) {
-        if ((fractionBits & 0x80000000) != 0) {
-          fraction += factor;
-        }
-        factor /= 2;
-        fractionBits = fractionBits << 1;
-      }
-
-      return fraction * exponent;
+    if (byte1 >= 128) {
+      mPart = (~mPart + 1) & 0x7FFFFF;
     }
+
+    int E = ePart;
+    int mPart2 = mPart << 8;
+    for (int i = 0; i < 24; i++) {
+      if ((mPart2 & 0x80000000) == 0x80000000) M += factor[i];
+      mPart2 = mPart2 << 1;
+    }
+
+    double value;
+    if (byte1 < 128) {
+      value = M * math.pow(2.0, E - 128);
+    } else {
+      value = (M.abs() < 0.00000001) ? 0 : -M * math.pow(2.0, 127 - E);
+    }
+
+    return value;
   }
 
   static double _read32BitInteger(Uint8List entry) {

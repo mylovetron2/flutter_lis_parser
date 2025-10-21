@@ -79,7 +79,8 @@ class DataFormatSpec {
       case 5:
         return 'HMM';
       case 6:
-        return 'Unknown';
+        //return 'Unknown';
+        return 'MS';
       case 7:
         return '0.1 IN';
       default:

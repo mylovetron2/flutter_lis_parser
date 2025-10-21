@@ -1,0 +1,210 @@
+================================================================================
+                    PHÂN TÍCH QUÁ TRÌNH SAVE FILE LIS
+                           Flutter LIS Parser
+                          Generated: 2025-10-21
+================================================================================
+
+🔄 TỔNG QUAN QUY TRÌNH:
+Hệ thống LIS parser có 3 method save chính để xử lý các tình huống khác nhau:
+
+================================================================================
+1️⃣ saveDataFormatSpecToLIS() - Save metadata
+================================================================================
+
+MỤC ĐÍCH: 
+Ghi đè DataFormatSpec record (type 64) vào file LIS gốc
+
+QUY TRÌNH:
+1. Kiểm tra file đã mở và dataFSRIdx hợp lệ
+2. Tìm LisRecord tại vị trí dataFSRIdx  
+3. Serialize DataFormatSpec thành bytes:
+   - dataRecordType, datumSpecBlockType
+   - dataFrameSize, direction, opticalDepthUnit
+   - dataRefPoint, frameSpacing, absentValue
+   - depthRecordingMode, depthUnit, depthRepr
+4. Ghi đè trực tiếp vào file tại lisRecord.addr
+5. Return success/failure
+
+CODE LOCATION: lib/services/lis_file_parser.dart:19-59
+
+================================================================================
+2️⃣ saveLISWithDeletedRecords() - Save with deleted rows
+================================================================================
+
+MỤC ĐÍCH: 
+Tạo file LIS mới loại bỏ các data records bị đánh dấu xóa
+
+QUY TRÌNH:
+1. Xác định deleted rows từ _pendingChanges (type='delete')
+2. Tạo newLisRecords: giữ nguyên non-data records + data records không bị xóa
+3. Rebuild BlankRecord structure với địa chỉ mới
+4. Serialize từng record:
+   - Ghi BlankRecord header (16 bytes)
+   - Ghi LisRecord data 
+5. Save toàn bộ vào file mới
+6. Update internal state (fileName, blankRecords, lisRecords)
+
+CODE LOCATION: lib/services/lis_file_parser.dart:114-184
+
+================================================================================
+3️⃣ savePendingChanges() - Save data edits
+================================================================================
+
+MỤC ĐÍCH: 
+Áp dụng tất cả pending changes (edit + delete) vào file mới
+
+QUY TRÌNH CHÍNH:
+
+Phase 1: Preparation
+--------------------
+1. Read toàn bộ file gốc vào memory (originalBytes)
+2. Tạo modifiedBytes copy
+3. Xác định deletedRows từ _pendingChanges
+4. Lấy danh sách dataRecords cần giữ lại
+
+Phase 2: Apply Changes
+----------------------
+For each pending change (không phải 'delete'):
+  1. Extract change info: recordIndex, frameIndex, newValue, datum
+  2. Gọi _updateBytesInMemory() để modify bytes in-place
+
+Phase 3: Write Result
+---------------------
+1. Write modifiedBytes vào file mới (*_modified.lis)
+2. Update file handle to new file
+3. Clear _pendingChanges
+4. Close old file
+
+CODE LOCATION: lib/services/lis_file_parser.dart:2026-2135
+
+================================================================================
+🛠️ _updateBytesInMemory() - Core editing logic
+================================================================================
+
+TÍNH TOÁN VỊ TRÍ BYTE CHÍNH XÁC:
+
+1. Base offset:
+   - Russian LIS: +2 (skip record length)
+   - NTI format: +6 (skip header)
+
+2. Frame offset: 
+   byteOffset += frameIndex * dataFrameSize
+
+3. Datum offset:
+   - Loop qua datumBlocks từ đầu đến target datum
+   - Cộng dồn size của từng datum
+   - Thêm 4 bytes correction (match với parsing logic)
+
+4. Final position:
+   filePosition = lisRecord.addr + byteOffset
+
+ENCODE/DECODE VALUES:
+- _decodeValue(): Đọc bytes thành double (verify)
+- _encodeValue(): Convert double thành bytes theo reprCode
+- _encodeRussianLisFloat(): Custom encoder cho reprCode 68
+
+CODE LOCATION: lib/services/lis_file_parser.dart:2136-2297
+
+================================================================================
+🧩 VALUE ENCODING BY REPRCODE
+================================================================================
+
+ReprCode | Type                    | Encoding Method
+---------|-------------------------|------------------------------------------
+68       | 4-byte Russian LIS Float| _encodeRussianLisFloat() - Custom algorithm
+73       | 4-byte Integer          | ByteData.setInt32() Little Endian
+70       | 4-byte IBM Float        | ByteData.setFloat32() Big Endian  
+49       | 2-byte Float            | (value * 100).setInt16() Little Endian
+79       | 2-byte Integer          | ByteData.setInt16() Little Endian
+
+================================================================================
+🔐 RUSSIAN LIS FLOAT ENCODING (REPRCODE 68)
+================================================================================
+
+ALGORITHM STEPS:
+1. Handle zero case: return [0,0,0,0]
+2. Extract sign bit, calculate absolute value
+3. Normalize fraction to [0.5, 1.0) range
+4. Calculate exponent bits (127/128 base + adjustments)
+5. Convert fraction to 23-bit mantissa using bit iteration
+6. Apply complement for negative numbers
+7. Assemble: sign(1) + exponent(8) + mantissa(23) bits
+8. Extract as big-endian bytes [ch0, ch1, ch2, ch3]
+
+CODE LOCATION: lib/services/lis_file_parser.dart:2371-2440
+
+================================================================================
+📊 DATA FLOW SUMMARY
+================================================================================
+
+User Edit → _pendingChanges → savePendingChanges() → 
+  _updateBytesInMemory() → _encodeValue() → 
+    Modified File Bytes → New LIS File
+
+KEY FEATURES:
+✅ Non-destructive: Tạo file mới, không ghi đè file gốc
+✅ Precision: Exact byte-level positioning matching parser logic  
+✅ Validation: Verify encoded values bằng decode ngược lại
+✅ Debug support: Extensive logging cho troubleshooting
+✅ Multi-format: Support cả Russian LIS và NTI format
+
+================================================================================
+🔧 HELPER METHODS
+================================================================================
+
+_doubleToBytes(): Convert double to 8-byte array (Little Endian)
+_decodeValue(): Read bytes and convert to double based on reprCode
+_encodeValue(): Convert double to bytes based on reprCode
+_encodeRussianLisFloat(): Custom encoding for Russian LIS float format
+
+================================================================================
+⚠️ CRITICAL NOTES
+================================================================================
+
+1. BYTE POSITIONING:
+   - Must match exact parsing logic in getAllData()
+   - 4-byte correction needed for proper alignment
+   - Frame size calculation critical for multi-frame records
+
+2. REPRCODE 68 ENCODING:
+   - Custom algorithm specific to Russian LIS format
+   - Different from standard IEEE 754 float
+   - Requires precise bit manipulation
+
+3. FILE SAFETY:
+   - Always creates new file (*_modified.lis)
+   - Original file remains untouched
+   - Extensive validation before writing
+
+4. PENDING CHANGES:
+   - Supports both 'edit' and 'delete' operations
+   - Changes accumulated in _pendingChanges Map
+   - Batch processing for efficiency
+
+================================================================================
+📁 FILE STRUCTURE AFTER SAVE
+================================================================================
+
+Original File: data.lis
+↓
+Modified File: data_modified.lis (contains all changes)
+↓
+New File Handle: Points to modified file for continued operations
+
+================================================================================
+🐛 DEBUG INFORMATION
+================================================================================
+
+Extensive debug logging includes:
+- File positions and byte offsets
+- Value encoding/decoding verification  
+- Record indexing and frame calculations
+- Byte-level hex dumps for verification
+- Before/after value comparisons
+
+All debug statements can be found throughout the save methods for
+troubleshooting and verification purposes.
+
+================================================================================
+                             END OF ANALYSIS
+================================================================================

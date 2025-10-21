@@ -914,15 +914,12 @@ class LisFileParser {
         if (index >= data.length) break;
 
         final entryType = data[index++];
-        print('Entry type: $entryType at index ${index - 1}');
 
         if (entryType == 0) {
-          print('Found end of entry blocks');
           break; // End of entry blocks
         }
 
         if (index + 1 >= data.length) {
-          print('Not enough data for entry size and repr code');
           break;
         }
 
@@ -930,7 +927,6 @@ class LisFileParser {
         final reprCode = data[index++];
 
         if (index + size > data.length) {
-          print('Not enough data for entry data of size $size');
           break;
         }
 
@@ -938,7 +934,6 @@ class LisFileParser {
         index += size;
 
         final value = CodeReader.readCode(entryData, reprCode, size);
-        print('Entry $entryType: value=$value');
 
         switch (entryType) {
           case 1:
@@ -983,14 +978,12 @@ class LisFileParser {
       if (index < data.length) {
         if (index + 1 < data.length) {
           final size = data[index++];
-          final reprCode = data[index++];
-          print('Skipping entry: size=$size, reprCode=$reprCode');
+          index++; // Skip reprCode
           index += size; // Skip this entry
         }
 
         // Calculate number of datum spec blocks
         int remaining = data.length - index;
-        print('Remaining bytes for datum blocks: $remaining');
 
         if (fileType == LisConstants.fileTypeNti) {
           remaining -= 6; // Account for NTI header
@@ -998,7 +991,6 @@ class LisFileParser {
         }
 
         int numBlocks = remaining ~/ 40; // Each block is 40 bytes
-        print('Calculated $numBlocks datum spec blocks');
 
         // Parse datum spec blocks
         for (int i = 0; i < numBlocks && index + 40 <= data.length; i++) {
@@ -1006,7 +998,6 @@ class LisFileParser {
           final datumBlock = _parseDatumSpecBlock(blockData, i);
           if (datumBlock != null) {
             datumBlocks.add(datumBlock);
-            print('Added datum block: ${datumBlock.mnemonic}');
           }
           index += 40;
         }
@@ -1015,13 +1006,6 @@ class LisFileParser {
       // Calculate data record range if not already set
       if (startDataRec < 0) {
         await _findDataRecordRange();
-      }
-
-      print('Parsed ${datumBlocks.length} datum spec blocks');
-      for (var block in datumBlocks) {
-        print(
-          '  ${block.mnemonic}: ${block.units}, size=${block.size}, reprCode=${block.reprCode}',
-        );
       }
     } catch (e) {
       print('Error parsing data format spec: $e');
@@ -1077,15 +1061,6 @@ class LisFileParser {
       final size = data[index] * 256 + data[index + 1];
       index += 2;
 
-      // Debug logging for WF datums
-      if (mnemonic.startsWith('WF') ||
-          mnemonic == 'TIME' ||
-          mnemonic == 'SPEE') {
-        print('=== Datum $mnemonic Debug ===');
-        print('  Raw size bytes: [${data[index - 2]}, ${data[index - 1]}]');
-        print('  Calculated size: $size');
-      }
-
       // Skip 3 bytes
       index += 3;
 
@@ -1101,18 +1076,6 @@ class LisFileParser {
       final codeSize = CodeReader.getCodeSize(reprCode);
       final dataItemNum = size ~/ codeSize;
       final realSize = dataItemNum ~/ (nbSample > 0 ? nbSample : 1);
-
-      // Debug logging continued
-      if (mnemonic.startsWith('WF') ||
-          mnemonic == 'TIME' ||
-          mnemonic == 'SPEE') {
-        print('  nbSample: $nbSample');
-        print('  reprCode: $reprCode');
-        print('  codeSize: $codeSize');
-        print('  dataItemNum: $dataItemNum (size=$size / codeSize=$codeSize)');
-        print('  realSize: $realSize');
-        print('=== End $mnemonic Debug ===');
-      }
 
       return DatumSpecBlock(
         mnemonic: mnemonic,
@@ -1340,14 +1303,9 @@ class LisFileParser {
 
   // Get all data for a specific data record (converted from C++ GetAllData)
   Future<List<double>> getAllData(int currentDataRec) async {
-    print('getAllData called with currentDataRec=$currentDataRec');
-    print('datumBlocks.length = ${datumBlocks.length}');
-    print('dataFSRIdx = $dataFSRIdx');
-
     if (file == null ||
         currentDataRec < 0 ||
         currentDataRec >= lisRecords.length) {
-      print('Returning empty list - invalid conditions');
       return [];
     }
 
@@ -1488,11 +1446,6 @@ class LisFileParser {
         final currentPos = await file!.position();
         final recordLen = lisRecord.length;
 
-        print(
-          'Russian LIS: fileSize=$fileSize, currentPos=$currentPos, recordLen=$recordLen',
-        );
-        print('Available bytes: ${fileSize - currentPos}');
-
         Uint8List dataBytes;
         if (currentPos + recordLen > fileSize) {
           print(
@@ -1537,28 +1490,7 @@ class LisFileParser {
         int fileDataIdx = 0;
         final actualDataSize = maxBytes; // Use the actual data we read
 
-        print(
-          'Russian LIS: frameNum=$frameNum, actualDataSize=$actualDataSize, byteDataIdx=$byteDataIdx',
-        );
-        print('dataFormatSpec.dataFrameSize=${dataFormatSpec.dataFrameSize}');
-
-        // Debug datum block sizes
-        int totalExpectedSize = 0;
-        for (int i = 0; i < datumBlocks.length; i++) {
-          final datum = datumBlocks[i];
-          print(
-            'Datum $i: ${datum.mnemonic}, size=${datum.size}, reprCode=${datum.reprCode}, dataItemNum=${datum.dataItemNum}',
-          );
-          totalExpectedSize += datum.size;
-        }
-        print('Total expected size from datum blocks: $totalExpectedSize');
-        print(
-          'Expected per frame: $totalExpectedSize/$frameNum = ${totalExpectedSize / frameNum}',
-        );
-
         for (int frame = 0; frame < frameNum; frame++) {
-          print('=== Starting frame $frame, byteDataIdx=$byteDataIdx ===');
-
           for (int i = 0; i < datumBlocks.length; i++) {
             if (i == 0 && dataFormatSpec.depthRecordingMode == 0) {
               print('Skipping depth datum at frame $frame, datum $i');
@@ -1578,37 +1510,16 @@ class LisFileParser {
 
             // Check bounds before accessing data
             if (byteDataIdx + actualBytesNeeded > actualDataSize) {
-              print(
-                'Bounds check failed at datum $i (${datum.mnemonic}): byteDataIdx=$byteDataIdx, actualBytesNeeded=$actualBytesNeeded, actualDataSize=$actualDataSize',
-              );
-
-              // Let's see exactly where we are
-              print(
-                'Position breakdown: frame=$frame, datum=$i, expected_end=${byteDataIdx + actualBytesNeeded}',
-              );
-              print(
-                'Previous positions: frame=0 should use ${frame * dataFormatSpec.dataFrameSize} + depth_offset',
-              );
-
-              print('Breaking out of frame $frame at datum $i');
               break; // Exit if we don't have enough data
             }
 
             if (datum.size <= 4) {
               // Single value datum - read the entire size (following C++ logic)
-              final oldByteDataIdx = byteDataIdx;
               final entryBytes = byteData.sublist(
                 byteDataIdx,
                 byteDataIdx + datum.size,
               );
               byteDataIdx += datum.size;
-
-              // Debug byteDataIdx increment for single value datums
-              if (frame == 0 && i <= 10) {
-                print(
-                  'Single datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added ${datum.size})',
-                );
-              }
 
               final value = CodeReader.readCode(
                 entryBytes,
@@ -1620,14 +1531,6 @@ class LisFileParser {
                   ? double.nan
                   : value;
 
-              // Debug ACHV values specifically
-              if (datum.mnemonic == 'ACHV' && frame == 0) {
-                print(
-                  'DEBUG READ: ACHV frame 0 raw value: $value, final: $finalValue at position $oldByteDataIdx',
-                );
-                print('DEBUG READ: entryBytes = $entryBytes');
-              }
-
               if (fileDataIdx < fileData.length) {
                 fileData[fileDataIdx++] = finalValue;
               }
@@ -1636,7 +1539,6 @@ class LisFileParser {
               final codeSize = CodeReader.getCodeSize(datum.reprCode);
               final numElements =
                   datum.size ~/ codeSize; // Calculate number of elements
-              final oldByteDataIdx = byteDataIdx;
 
               // Read all elements of the array in this frame (following C++ approach)
               for (int j = 0; j < numElements; j++) {
@@ -1660,35 +1562,17 @@ class LisFileParser {
                   fileData[fileDataIdx++] = finalValue;
                 }
               }
-
-              // Debug array datum processing
-              if (frame == 0 && i <= 10) {
-                print(
-                  'Array datum ${datum.mnemonic}: byteDataIdx was $oldByteDataIdx, now $byteDataIdx (added ${datum.size} for $numElements elements)',
-                );
-              }
             }
           }
 
           // Skip depth in depth-per-frame mode
           if (dataFormatSpec.depthRecordingMode == 0) {
             final depthSize = CodeReader.getCodeSize(dataFormatSpec.depthRepr);
-            print(
-              '=== End of frame $frame: byteDataIdx before depth skip=$byteDataIdx, depthSize=$depthSize ===',
-            );
             if (byteDataIdx + depthSize > actualDataSize) {
-              print(
-                'Depth skip bounds check failed: byteDataIdx=$byteDataIdx, depthSize=$depthSize, actualDataSize=$actualDataSize',
-              );
               break; // Exit frame loop if no more data
             }
             byteDataIdx += depthSize;
-            print('=== After depth skip: byteDataIdx=$byteDataIdx ===');
           }
-
-          print(
-            '=== Completed frame $frame, final byteDataIdx=$byteDataIdx ===',
-          );
         }
 
         result = fileData
