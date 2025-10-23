@@ -1,3 +1,4 @@
+import '../models/entry_block.dart';
 // LIS File Parser - converted from CLisFile C++ class
 
 import 'dart:io';
@@ -12,179 +13,159 @@ import '../constants/lis_constants.dart';
 import '../models/file_header_record.dart';
 import 'code_reader.dart';
 
-// Đã bỏ shadow print để log debug xuất hiện trong terminal
-
 class LisFileParser {
-  /// Lưu DataFormatSpec hiện tại vào file LIS (ghi đè record type 64)
-  Future<bool> saveDataFormatSpecToLIS() async {
-    if (file == null || dataFSRIdx < 0 || dataFSRIdx >= lisRecords.length) {
-      print(
-        '[saveDataFormatSpecToLIS] Không tìm thấy record Data Format Spec hoặc file chưa mở',
-      );
-      return false;
-    }
+  /// Mã hóa EntryBlock và lưu ra file LIS mới
+  Future<bool> saveEntryBlockToNewFile(String newFilePath) async {
     try {
-      final lisRecord = lisRecords[dataFSRIdx];
-      await file!.setPosition(lisRecord.addr);
-      // Serialize DataFormatSpec thành bytes (giả lập: chỉ ghi các trường chính, cần chuẩn hóa lại nếu muốn đúng spec)
-      final bytes = <int>[];
-      bytes.addAll([dataFormatSpec.dataRecordType]);
-      bytes.addAll([dataFormatSpec.datumSpecBlockType]);
-      bytes.addAll([dataFormatSpec.dataFrameSize]);
-      bytes.addAll([dataFormatSpec.direction]);
-      bytes.addAll([dataFormatSpec.opticalDepthUnit]);
-      bytes.addAll(_doubleToBytes(dataFormatSpec.dataRefPoint));
-      bytes.addAll([dataFormatSpec.dataRefPointUnit]);
-      bytes.addAll(_doubleToBytes(dataFormatSpec.frameSpacing));
-      bytes.addAll([dataFormatSpec.frameSpacingUnit]);
-      bytes.addAll([dataFormatSpec.maxFramesPerRecord]);
-      bytes.addAll(_doubleToBytes(dataFormatSpec.absentValue));
-      bytes.addAll([dataFormatSpec.depthRecordingMode]);
-      bytes.addAll([dataFormatSpec.depthUnit]);
-      bytes.addAll([dataFormatSpec.depthRepr]);
-      bytes.addAll([dataFormatSpec.datumSpecBlockSubType]);
-      // Ghi đè lên record type 64
-      await file!.writeFrom(Uint8List.fromList(bytes));
-      print('[saveDataFormatSpecToLIS] Đã ghi đè DataFormatSpec vào file LIS');
+      final entryBlockBytes = encodeEntryBlock(entryBlock);
+      // Đọc toàn bộ file gốc vào buffer
+      final originalFile = File(fileName);
+      final originalBytes = await originalFile.readAsBytes();
+      // Tính offset thực tế
+      int fileOffset = lisRecords[dataFSRIdx].addr + entryBlockOffset;
+      print('DEBUG: fileOffset calculation:');
+      print('  lisRecords[dataFSRIdx].addr = ${lisRecords[dataFSRIdx].addr}');
+      print('  entryBlockOffset = $entryBlockOffset');
+      print('  calculated fileOffset = $fileOffset');
+
+
+      fileOffset = lisRecords[dataFSRIdx].addr + 2;
+      // Ghi ra file mới
+      final newBytes = Uint8List.fromList(originalBytes);
+      for (int i = 0; i < entryBlockBytes.length; i++) {
+        if (fileOffset + i < newBytes.length) {
+          newBytes[fileOffset + i] = entryBlockBytes[i];
+        }
+      }
+      await File(newFilePath).writeAsBytes(newBytes);
       return true;
     } catch (e) {
-      print('[saveDataFormatSpecToLIS] Lỗi khi ghi DataFormatSpec: $e');
+      print('Error saving EntryBlock to new file: $e');
       return false;
     }
   }
+  /// Ghi đè EntryBlock đã mã hóa vào file LIS
+  Future<bool> saveEntryBlock() async {
+    if (file == null) return false;
+    final entryBlockBytes = encodeEntryBlock(entryBlock);
+    // Tính offset thực tế trong file
+    int fileOffset = lisRecords[dataFSRIdx].addr + entryBlockOffset;
+    await file!.setPosition(fileOffset);
+    await file!.writeFrom(entryBlockBytes);
+    await file!.flush();
+    return true;
+  }
+  /// Mã hóa EntryBlock thành Uint8List để ghi lại vào file LIS
+  Uint8List encodeEntryBlock(EntryBlock entryBlock) {
+    final bytes = <int>[];
+    // Ví dụ: mã hóa từng trường, cần đúng thứ tự và cấu trúc
+    // entryType, size, reprCode, entryData
+    // Trường 1: nDataRecordType
+    bytes.add(1); // entryType
+    bytes.add(1); // size
+    bytes.add(66); // reprCode (ví dụ: 66 = 1 byte int)
+    bytes.add(entryBlock.nDataRecordType & 0xFF);
 
-  List<int> _doubleToBytes(double value) {
-    final b = ByteData(8);
-    b.setFloat64(0, value, Endian.little);
-    return b.buffer.asUint8List().toList();
+    // Trường 2: nDatumSpecBlockType
+    bytes.add(2);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nDatumSpecBlockType & 0xFF);
+
+  // Trường 3: nDataFrameSize (2 byte, reprCode 79, big endian)
+  bytes.add(3);
+  bytes.add(2);
+  bytes.add(79); // 2 byte int
+  bytes.add((entryBlock.nDataFrameSize >> 8) & 0xFF); // byte cao
+  bytes.add(entryBlock.nDataFrameSize & 0xFF);        // byte thấp
+
+    // Trường 4: nDirection
+    bytes.add(4);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nDirection & 0xFF);
+
+    // Trường 5: nOpticalDepthUnit
+    bytes.add(5);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nOpticalDepthUnit & 0xFF);
+
+    // Trường 6: fDataRefPoint (4 byte float, reprCode 68)
+    bytes.add(6);
+    bytes.add(4);
+    bytes.add(68);
+    final refPointBytes = ByteData(4)..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
+    bytes.addAll(refPointBytes.buffer.asUint8List());
+
+    // Trường 7: strDataRefPointUnit (4 byte ASCII, reprCode 65)
+    bytes.add(7);
+    bytes.add(4);
+    bytes.add(65);
+    final unitBytes = entryBlock.strDataRefPointUnit.padRight(4).codeUnits;
+    bytes.addAll(unitBytes.take(4));
+
+    // Trường 8: fFrameSpacing (4 byte float, reprCode 68)
+    bytes.add(8);
+    bytes.add(4);
+    bytes.add(68);
+  final spacingBytes = ByteData(4)..setFloat32(0, entryBlock.fFrameSpacing, Endian.big);
+  bytes.addAll(spacingBytes.buffer.asUint8List());
+
+    // Trường 9: strFrameSpacingUnit (4 byte ASCII, reprCode 65)
+    bytes.add(9);
+    bytes.add(4);
+    bytes.add(65);
+    final spacingUnitBytes = entryBlock.strFrameSpacingUnit.padRight(4).codeUnits;
+    bytes.addAll(spacingUnitBytes.take(4));
+
+    // Trường 10: nMaxFramesPerRecord (1 byte int, reprCode 66)
+    bytes.add(10);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nMaxFramesPerRecord & 0xFF);
+
+    // Trường 12: fAbsentValue (4 byte float, reprCode 68)
+    bytes.add(12);
+    bytes.add(4);
+    bytes.add(68);
+    final absentBytes = ByteData(4)..setFloat32(0, entryBlock.fAbsentValue, Endian.little);
+    bytes.addAll(absentBytes.buffer.asUint8List());
+
+    // Trường 13: nDepthRecordingMode (1 byte int, reprCode 66)
+    bytes.add(13);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nDepthRecordingMode & 0xFF);
+
+    // Trường 14: strDepthUnit (4 byte ASCII, reprCode 65)
+    bytes.add(14);
+    bytes.add(4);
+    bytes.add(65);
+    final depthUnitBytes = entryBlock.strDepthUnit.padRight(4).codeUnits;
+    bytes.addAll(depthUnitBytes.take(4));
+
+    // Trường 15: nDepthRepr (1 byte int, reprCode 66)
+    bytes.add(15);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nDepthRepr & 0xFF);
+
+    // Trường 16: nDatumSpecBlockSubType (1 byte int, reprCode 66)
+    bytes.add(16);
+    bytes.add(1);
+    bytes.add(66);
+    bytes.add(entryBlock.nDatumSpecBlockSubType & 0xFF);
+
+    // Kết thúc EntryBlock
+    bytes.add(0); // entryType = 0 (end)
+    return Uint8List.fromList(bytes);
   }
 
+  /// Offset (vị trí) của EntryBlock trong file, dùng để edit/save lại
+  int entryBlockOffset = -1;
   // Danh sách các File Header Record đã parse
   final List<FileHeaderRecord> fileHeaderRecords = [];
-
-  /// Kiểm tra và in ra các chỉ số, địa chỉ, liên kết giữa các record trong file LIS mới
-  Future<void> validateNewLISFile(String newFileName) async {
-    try {
-      final bytes = await File(newFileName).readAsBytes();
-      int pos = 0;
-      int recordIdx = 0;
-      print('--- Kiểm tra file LIS mới: $newFileName ---');
-      while (pos + 16 < bytes.length) {
-        // Đọc blank record header
-        final blankBytes = bytes.sublist(pos, pos + 16);
-        final prevAddr =
-            blankBytes[0] +
-            blankBytes[1] * 256 +
-            blankBytes[2] * 65536 +
-            blankBytes[3] * 16777216;
-        final addr =
-            blankBytes[4] +
-            blankBytes[5] * 256 +
-            blankBytes[6] * 65536 +
-            blankBytes[7] * 16777216;
-        final nextAddr =
-            blankBytes[8] +
-            blankBytes[9] * 256 +
-            blankBytes[10] * 65536 +
-            blankBytes[11] * 16777216;
-        final nextRecLen = blankBytes[13] + blankBytes[12] * 256;
-        final num = blankBytes[15];
-        print(
-          'Record $recordIdx: prevAddr=$prevAddr, addr=$addr, nextAddr=$nextAddr, nextRecLen=$nextRecLen, num=$num',
-        );
-        // Kiểm tra liên kết
-        if (addr != pos) {
-          print('  LỖI: addr != pos ($addr != $pos)');
-        }
-        if (nextAddr != 0 && nextAddr != pos + nextRecLen) {
-          print(
-            '  LỖI: nextAddr != pos + nextRecLen ($nextAddr != ${pos + nextRecLen})',
-          );
-        }
-        pos += nextRecLen;
-        recordIdx++;
-      }
-      print('--- Kết thúc kiểm tra file LIS mới ---');
-    } catch (e) {
-      print('Lỗi kiểm tra file LIS mới: $e');
-    }
-  }
-
-  /// Tạo file LIS mới chỉ với các record không bị xóa (type=0), giữ nguyên các record header, trailer, info...
-  Future<bool> saveLISWithDeletedRecords(String newFileName) async {
-    try {
-      // Xác định các data record bị xóa
-      final deletedRows = _pendingChanges.entries
-          .where((e) => e.value['type'] == 'delete')
-          .map((e) => e.value['rowIndex'] as int)
-          .toSet();
-
-      // Tạo danh sách record mới: giữ nguyên các record không phải type=0, với type=0 thì chỉ giữ lại các record không bị xóa
-      final newLisRecords = <LisRecord>[];
-      for (int i = 0; i < lisRecords.length; i++) {
-        final r = lisRecords[i];
-        if (r.type == 0) {
-          // Data record
-          final dataIdx = i - startDataRec;
-          if (!deletedRows.contains(dataIdx)) {
-            newLisRecords.add(r);
-          } else {
-            print(
-              'DEBUG: Loại bỏ data record tại index $i (dataIdx=$dataIdx) do bị đánh dấu xóa',
-            );
-          }
-        } else {
-          // Header/trailer/info record giữ nguyên
-          newLisRecords.add(r);
-        }
-      }
-
-      // Tạo lại danh sách blankRecords cho đúng liên kết
-      final newBlankRecords = <BlankRecord>[];
-      int addr = 0;
-      for (int i = 0; i < newLisRecords.length; i++) {
-        final r = newLisRecords[i];
-        final prevAddr = i == 0 ? 0 : newBlankRecords[i - 1].addr;
-        final nextAddr = addr + r.length + 16; // 16 bytes header
-        final nextRecLen = r.length + 16;
-        // Lấy num từ record gốc nếu có, hoặc 0
-        int num = 0;
-        if (i < blankRecords.length) {
-          num = blankRecords[i].num;
-        }
-        final blank = BlankRecord(
-          prevAddr: prevAddr,
-          addr: addr,
-          nextAddr: i < newLisRecords.length - 1 ? nextAddr : 0,
-          nextRecLen: nextRecLen,
-          num: num,
-        );
-        newBlankRecords.add(blank);
-        addr = nextAddr;
-      }
-
-      // Tạo mảng bytes cho file mới
-      final bytes = <int>[];
-      for (int i = 0; i < newLisRecords.length; i++) {
-        // Ghi blank record header
-        bytes.addAll(newBlankRecords[i].toBytes());
-        // Ghi data record
-        // Đọc dữ liệu record từ file gốc
-        final r = newLisRecords[i];
-        await file!.setPosition(r.addr);
-        final data = await file!.read(r.length);
-        bytes.addAll(data);
-      }
-
-      // Ghi ra file mới
-      await File(newFileName).writeAsBytes(bytes);
-      print('Đã ghi file LIS mới với các record không bị xóa: $newFileName');
-      return true;
-    } catch (e) {
-      print('Lỗi khi ghi file LIS mới: $e');
-      return false;
-    }
-  }
 
   /// Returns the mnemonic (column name) of the first datum in the LIS file, or empty string if not available
   String get firstColumnName =>
@@ -204,6 +185,7 @@ class LisFileParser {
   List<WellInfoBlock> chanBlocks = [];
 
   DataFormatSpec dataFormatSpec = DataFormatSpec();
+  EntryBlock entryBlock = EntryBlock();
 
   // File parsing indices
   int dataFSRIdx = -1;
@@ -237,6 +219,7 @@ class LisFileParser {
     byteData = Uint8List(200000); // Increase buffer size for larger records
     fileData = Float32List(60000);
     dataFormatSpec.init();
+    entryBlock = EntryBlock();
   }
 
   // Track deleted rows as pending changes
@@ -831,28 +814,22 @@ class LisFileParser {
         recordData = Uint8List.fromList(await file!.read(recordLen));
       } else {
         // NTI format - handle multi-block
-        // Match C++ logic: Seek(lAddr+6), then Seek(-6) = effectively Seek(lAddr)
-        print('NTI format: moving to position ${lisRecord.addr}');
-        await file!.setPosition(lisRecord.addr);
+        print('NTI format: moving to position ${lisRecord.addr + 2}');
+        await file!.setPosition(lisRecord.addr + 2);
 
         // Read size
         final sizeBytes = await file!.read(4);
-        print(
-          'Size bytes: ${sizeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
-        );
+        print('Size bytes: ${sizeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
 
-        // For NTI format, read length as big-endian 16-bit value (matching C++ code)
-        int recordLen =
-            sizeBytes[1] + sizeBytes[0] * 256; // Big-endian as in C++
-        int continueFlag = sizeBytes[3]; // Continue flag is in byte 3
+        int recordLen = sizeBytes[1] + sizeBytes[0] * 256;
+        int continueFlag = sizeBytes[3];
         print('Record length: $recordLen, continue flag: $continueFlag');
 
-        // Skip type
         await file!.setPosition(await file!.position() + 2);
         print('Skipped type, now at position ${await file!.position()}');
 
         List<int> allData = [];
-        recordLen = recordLen - 6; // 4 for len, 2 for type
+        recordLen = recordLen - 2; // DFSR chỉ có 2 byte header
         print('Adjusted record length: $recordLen');
 
         if (continueFlag == 1) {
@@ -863,14 +840,12 @@ class LisFileParser {
             allData.addAll(data);
             print('Read ${data.length} bytes, total: ${allData.length}');
 
-            // Read next block header to get the new continue flag
             final nextSizeBytes = await file!.read(4);
-            recordLen = nextSizeBytes[1] + nextSizeBytes[0] * 256; // Big-endian
+            recordLen = nextSizeBytes[1] + nextSizeBytes[0] * 256;
             recordLen = recordLen - 4;
-            continueFlag = nextSizeBytes[3]; // Update continue flag
+            continueFlag = nextSizeBytes[3];
             print('Next block: length=$recordLen, continue=$continueFlag');
 
-            // Check if this is the last block (continueFlag == 2 means last block)
             if (continueFlag == 2) {
               print('End of multi-block record detected');
               break;
@@ -883,12 +858,14 @@ class LisFileParser {
           print('Read ${data.length} bytes');
         }
 
-        recordData = Uint8List.fromList(allData);
+        // Chỉ tạo recordData từ allData.sublist(2) để loại bỏ 2 byte đầu
+        recordData = Uint8List.fromList(allData.length > 2 ? allData.sublist(2) : []);
         print('Total record data: ${recordData.length} bytes');
       }
 
       // Parse the data format specification
-      await _parseDataFormatSpec(recordData);
+  // Luôn bỏ qua 2 byte đầu (header/padding) để EntryBlock bắt đầu từ 01 01
+  await _parseDataFormatSpec(recordData.length > 2 ? recordData.sublist(2) : Uint8List(0));
     } catch (e) {
       print('Error reading Data Format Specification: $e');
     }
@@ -896,186 +873,320 @@ class LisFileParser {
 
   // Parse Data Format Specification data (converted from C++ logic)
   Future<void> _parseDataFormatSpec(Uint8List data) async {
-    try {
-      print('_parseDataFormatSpec called with ${data.length} bytes');
-      int index = 0;
-
-      // Skip initial bytes for Russian format
-      if (fileType == LisConstants.fileTypeLis) {
-        index = 2;
-        print('Russian format: skipping 2 initial bytes');
+    print('_parseDataFormatSpec called with ${data.length} bytes');
+    // Debug: In ra giá trị raw của EntryBlock (từ đầu đến khi gặp entryType == 0)
+  int rawIdx = 0;
+  List<int> entryBlockRaw = [];
+  // Lưu lại offset entryBlock (tính từ đầu file DataFormatSpec record)
+  entryBlockOffset = 0; // Nếu cần offset thực tế trong file, cần cộng thêm addr của record
+    while (rawIdx < data.length - 1) {
+      final entryType = data[rawIdx];
+      if (entryBlockOffset == 0) {
+        entryBlockOffset = rawIdx; // Lưu offset entryBlock đầu tiên
       }
-
-      datumBlocks.clear();
-      print('Cleared datumBlocks, starting to parse entry blocks');
-
-      // Read entry blocks
-      while (index < data.length - 1) {
-        if (index >= data.length) break;
-
-        final entryType = data[index++];
-
-        if (entryType == 0) {
-          break; // End of entry blocks
-        }
-
-        if (index + 1 >= data.length) {
-          break;
-        }
-
-        final size = data[index++];
-        final reprCode = data[index++];
-
-        if (index + size > data.length) {
-          break;
-        }
-
-        final entryData = data.sublist(index, index + size);
-        index += size;
-
-        final value = CodeReader.readCode(entryData, reprCode, size);
-
-        switch (entryType) {
-          case 1:
-            dataFormatSpec.dataRecordType = value.toInt();
-            break;
-          case 2:
-            dataFormatSpec.datumSpecBlockType = value.toInt();
-            break;
-          case 3:
-            dataFormatSpec.dataFrameSize = value.toInt();
-            print('Set dataFrameSize to ${dataFormatSpec.dataFrameSize}');
-            break;
-          case 4:
-            dataFormatSpec.direction = value.toInt();
-            break;
-          case 8:
-            dataFormatSpec.frameSpacing = value;
-            break;
-          case 9:
-            dataFormatSpec.frameSpacingUnit = value.toInt();
-            break;
-          case 12:
-            dataFormatSpec.absentValue = value;
-            break;
-          case 13:
-            dataFormatSpec.depthRecordingMode = value.toInt();
-            break;
-          case 14:
-            dataFormatSpec.depthUnit = value.toInt();
-            break;
-          case 15:
-            dataFormatSpec.depthRepr = value.toInt();
-            break;
-        }
+      entryBlockRaw.add(entryType);
+      if (entryType == 0) {
+        break;
       }
-
+      if (rawIdx + 2 >= data.length) break;
+      final size = data[rawIdx + 1];
+      final reprCode = data[rawIdx + 2];
+      entryBlockRaw.add(size);
+      entryBlockRaw.add(reprCode);
+      if (rawIdx + 3 + size > data.length) break;
+      entryBlockRaw.addAll(data.sublist(rawIdx + 3, rawIdx + 3 + size));
+      rawIdx += 3 + size;
+    }
+    print(
+      'RAW ENTRYBLOCK BYTES: ${entryBlockRaw.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+    );
+    int index = 0;
+    entryBlock = EntryBlock();
+    int entryFieldCount = 0;
+    // Chỉ đọc tối đa 16 trường EntryBlock, dừng khi gặp entryType == 0 hoặc index vượt quá data
+    while (index < data.length - 1 && entryFieldCount < 16) {
+      if (index >= data.length) break;
+      final entryType = data[index++];
+      if (entryType == 0) {
+        print(
+          'DEBUG: entryFieldCount=$entryFieldCount, index=$index, entryType=0 (end)',
+        );
+        break; // End of entry blocks
+      }
+      if (index + 1 >= data.length) {
+        print(
+          'DEBUG: entryFieldCount=$entryFieldCount, index=$index, out of bounds for size/reprCode',
+        );
+        break;
+      }
+      final size = data[index++];
+      final reprCode = data[index++];
+      if (index + size > data.length) {
+        print(
+          'DEBUG: entryFieldCount=$entryFieldCount, index=$index, size=$size, reprCode=$reprCode, out of bounds for entryData',
+        );
+        break;
+      }
+      final entryData = data.sublist(index, index + size);
       print(
-        'Finished parsing entry blocks at index $index, data.length=${data.length}',
+        'DEBUG: entryFieldCount=$entryFieldCount, index=$index, entryType=$entryType, size=$size, reprCode=$reprCode, entryData=${entryData.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
+      index += size;
+      entryFieldCount++;
+      final value = CodeReader.readCode(entryData, reprCode, size);
+      switch (entryType) {
+        case 1:
+          entryBlock.nDataRecordType = value is num ? value.toInt() : 0;
+          break;
+        case 2:
+          entryBlock.nDatumSpecBlockType = value is num ? value.toInt() : 0;
+          break;
+        case 3:
+          entryBlock.nDataFrameSize = value is num ? value.toInt() : 0;
+          print('Set nDataFrameSize to ${entryBlock.nDataFrameSize}');
+          break;
+        case 4:
+          entryBlock.nDirection = value is num ? value.toInt() : 0;
+          break;
+        case 5:
+          entryBlock.nOpticalDepthUnit = value is num ? value.toInt() : 0;
+          break;
+        case 6:
+          entryBlock.fDataRefPoint = value is num ? value.toDouble() : 0.0;
+          break;
+        case 7:
+          entryBlock.strDataRefPointUnit = value is String ? value : '';
+          break;
+        case 8:
+          entryBlock.fFrameSpacing = value is num ? value.toDouble() : 0.0;
+          break;
+        case 9:
+          entryBlock.strFrameSpacingUnit = value is String ? value : '';
+          break;
+        case 10:
+          entryBlock.nMaxFramesPerRecord = value is num ? value.toInt() : 0;
+          break;
+        case 12:
+          entryBlock.fAbsentValue = value is num ? value.toDouble() : -999.255;
+          break;
+        case 13:
+          entryBlock.nDepthRecordingMode = value is num ? value.toInt() : 0;
+          break;
+        case 14:
+          entryBlock.strDepthUnit = value is String ? value : '';
+          break;
+        case 15:
+          entryBlock.nDepthRepr = value is num ? value.toInt() : 68;
+          break;
+        case 16:
+          entryBlock.nDatumSpecBlockSubType = value is num ? value.toInt() : 0;
+          break;
+      }
+    }
+
+    //Đọc xong EntryBlock
+    //Đọc Datum Spec Blocks
+    // Đọc Datum Spec Blocks
+    datumBlocks.clear();
+    print('Starting to read Datum Spec Blocks from index $index');
+
+    int nCurPos = index+3;
+    int nTotalSize = data.length;
+    int offset = 0;
+
+    print('nCurPos=$nCurPos, nTotalSize=$nTotalSize');
+
+    while (nCurPos < nTotalSize) {
+      if (nTotalSize - nCurPos < 40) {
+        print('Remaining bytes < 40, breaking: ${nTotalSize - nCurPos}');
+        break;
+      }
+
+      print('Reading DatumSpecBlock at position $nCurPos');
+      
+      // Read mnemonic (4 bytes, repr code 65 - ASCII)
+      if (nCurPos + 4 > nTotalSize) break;
+      final mnemonicBytes = data.sublist(nCurPos, nCurPos + 4);
+      String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
+      nCurPos += 4;
+      print('Mnemonic: "$mnemonic"');
+
+      // Read service ID (6 bytes, repr code 65 - ASCII)
+      if (nCurPos + 6 > nTotalSize) break;
+      final serviceIdBytes = data.sublist(nCurPos, nCurPos + 6);
+      String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
+      nCurPos += 6;
+      print('ServiceID: "$serviceId"');
+
+      // Read service order number (8 bytes, repr code 65 - ASCII)
+      if (nCurPos + 8 > nTotalSize) break;
+      final serviceOrderBytes = data.sublist(nCurPos, nCurPos + 8);
+      String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
+      nCurPos += 8;
+      print('ServiceOrderNb: "$serviceOrderNb"');
+
+      // Read units (4 bytes, repr code 65 - ASCII)
+      if (nCurPos + 4 > nTotalSize) break;
+      final unitsBytes = data.sublist(nCurPos, nCurPos + 4);
+      String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
+      nCurPos += 4;
+      print('Units: "$units"');
+
+      // Skip API Codes (4 bytes)
+      nCurPos += 4;
+
+      // Read file number (2 bytes, repr code 79 - 16-bit integer)
+      if (nCurPos + 2 > nTotalSize) break;
+      final fileNbBytes = data.sublist(nCurPos, nCurPos + 2);
+      int fileNb = fileNbBytes[1] + (fileNbBytes[0] << 8); // Big endian
+      nCurPos += 2;
+      print('FileNb: $fileNb');
+
+      // Read size (2 bytes, repr code 79 - 16-bit integer)
+      if (nCurPos + 2 > nTotalSize) break;
+      final sizeBytes = data.sublist(nCurPos, nCurPos + 2);
+      int size = sizeBytes[1] + (sizeBytes[0] << 8); // Big endian
+      nCurPos += 2;
+      print('Size: $size');
+
+      // Skip Process Level (3 bytes)
+      nCurPos += 3;
+
+      // Read number of samples (1 byte, repr code 66 - 8-bit integer)
+      if (nCurPos + 1 > nTotalSize) break;
+      int nbSamples = data[nCurPos];
+      nCurPos += 1;
+      print('NbSamples: $nbSamples');
+
+      // Read representation code (1 byte, repr code 66 - 8-bit integer)
+      if (nCurPos + 1 > nTotalSize) break;
+      int reprCode = data[nCurPos];
+      nCurPos += 1;
+      print('ReprCode: $reprCode');
+
+      // Skip Process Indication (5 bytes)
+      nCurPos += 5;
+
+      // Calculate derived values
+      final codeSize = CodeReader.getCodeSize(reprCode);
+      final dataItemNum = nbSamples > 0 ? (size ~/ codeSize) ~/ nbSamples : (size ~/ codeSize);
+      final realSize = dataItemNum;
+
+      print('CodeSize: $codeSize, DataItemNum: $dataItemNum, RealSize: $realSize');
+
+      // Create DatumSpecBlock
+      final datumSpecBlock = DatumSpecBlock(
+        mnemonic: mnemonic,
+        serviceId: serviceId,
+        serviceOrderNb: serviceOrderNb,
+        units: units,
+        fileNb: fileNb,
+        size: size,
+        nbSample: nbSamples,
+        reprCode: reprCode,
+        offset: offset,
+        dataItemNum: dataItemNum,
+        realSize: realSize,
       );
 
-      // Skip to datum spec blocks
-      if (index < data.length) {
-        if (index + 1 < data.length) {
-          final size = data[index++];
-          index++; // Skip reprCode
-          index += size; // Skip this entry
-        }
+      datumBlocks.add(datumSpecBlock);
+      offset += size;
 
-        // Calculate number of datum spec blocks
-        int remaining = data.length - index;
-
-        if (fileType == LisConstants.fileTypeNti) {
-          remaining -= 6; // Account for NTI header
-          print('NTI format: adjusted remaining to $remaining');
-        }
-
-        int numBlocks = remaining ~/ 40; // Each block is 40 bytes
-
-        // Parse datum spec blocks
-        for (int i = 0; i < numBlocks && index + 40 <= data.length; i++) {
-          final blockData = data.sublist(index, index + 40);
-          final datumBlock = _parseDatumSpecBlock(blockData, i);
-          if (datumBlock != null) {
-            datumBlocks.add(datumBlock);
-          }
-          index += 40;
-        }
-      }
-
-      // Calculate data record range if not already set
-      if (startDataRec < 0) {
-        await _findDataRecordRange();
-      }
-    } catch (e) {
-      print('Error parsing data format spec: $e');
+      print('Added DatumSpecBlock: ${datumSpecBlock.mnemonic}, offset updated to $offset');
     }
+
+    print('Finished reading ${datumBlocks.length} Datum Spec Blocks');
+
+    // Update DataFormatSpec with calculated values
+    dataFormatSpec.depthRepr = entryBlock.nDepthRepr;
+    dataFormatSpec.frameSpacing = entryBlock.fFrameSpacing;
+    dataFormatSpec.direction = entryBlock.nDirection;
+    dataFormatSpec.depthUnit = entryBlock.nOpticalDepthUnit;
+    dataFormatSpec.absentValue = entryBlock.fAbsentValue;
+    dataFormatSpec.depthRecordingMode = entryBlock.nDepthRecordingMode;
+
+    // Calculate total frame size from datum blocks
+    int totalFrameSize = 0;
+    for (final datum in datumBlocks) {
+      totalFrameSize += datum.size;
+    }
+    if (dataFormatSpec.depthRecordingMode == 0) {
+      // Add depth size for depth-per-frame mode
+      totalFrameSize += CodeReader.getCodeSize(dataFormatSpec.depthRepr);
+    }
+    dataFormatSpec.dataFrameSize = totalFrameSize;
+
+    print('DataFormatSpec updated: frameSize=$totalFrameSize, depthRepr=${dataFormatSpec.depthRepr}');
+
   }
 
   // Parse individual Datum Spec Block (converted from C++ logic)
   DatumSpecBlock? _parseDatumSpecBlock(Uint8List data, int offset) {
     try {
+      print('DatumSpecBlock raw bytes: ' + data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       int index = 0;
 
-      // Read mnemonic (4 bytes)
       final mnemonicBytes = data.sublist(index, index + 4);
+      print('mnemonicBytes: ' + mnemonicBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 4;
-      String mnemonic = String.fromCharCodes(
-        mnemonicBytes,
-      ).trim().replaceAll('\x00', '');
+      String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
+      print('mnemonic: $mnemonic');
 
-      // Handle duplicate DEPT
       if (offset > 0 && mnemonic == 'DEPT') {
         mnemonic = 'DEP1';
       }
 
-      // Read service ID (6 bytes)
       final serviceIdBytes = data.sublist(index, index + 6);
+      print('serviceIdBytes: ' + serviceIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 6;
-      String serviceId = String.fromCharCodes(
-        serviceIdBytes,
-      ).trim().replaceAll('\x00', '');
+      String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
+      print('serviceId: $serviceId');
 
-      // Read service order number (8 bytes)
       final serviceOrderBytes = data.sublist(index, index + 8);
+      print('serviceOrderBytes: ' + serviceOrderBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 8;
-      String serviceOrderNb = String.fromCharCodes(
-        serviceOrderBytes,
-      ).trim().replaceAll('\x00', '');
+      String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
+      print('serviceOrderNb: $serviceOrderNb');
 
-      // Read units (4 bytes)
       final unitsBytes = data.sublist(index, index + 4);
+      print('unitsBytes: ' + unitsBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 4;
-      String units = String.fromCharCodes(
-        unitsBytes,
-      ).trim().replaceAll('\x00', '');
+      String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
+      print('units: $units');
 
-      // Skip API codes (4 bytes)
+      final apiCodeBytes = data.sublist(index, index + 4);
+      print('apiCodeBytes (skip): ' + apiCodeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 4;
 
-      // Read file number (2 bytes) - Big-endian format
       final fileNb = data[index] * 256 + data[index + 1];
+      print('fileNbBytes: ' + data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 2;
+      print('fileNb: $fileNb');
 
-      // Read size (2 bytes) - Big-endian format
       final size = data[index] * 256 + data[index + 1];
+      print('sizeBytes: ' + data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 2;
+      print('size: $size');
 
-      // Skip 3 bytes
+      final skip3Bytes = data.sublist(index, index + 3);
+      print('skip3Bytes: ' + skip3Bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 3;
 
-      // Read number of samples (1 byte)
       final nbSample = data[index];
+      print('nbSampleByte: ' + data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 1;
+      print('nbSample: $nbSample');
 
-      // Read representation code (1 byte)
       final reprCode = data[index];
+      print('reprCodeByte: ' + data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 1;
+      print('reprCode: $reprCode');
 
-      // Calculate derived values
       final codeSize = CodeReader.getCodeSize(reprCode);
       final dataItemNum = size ~/ codeSize;
       final realSize = dataItemNum ~/ (nbSample > 0 ? nbSample : 1);
+
+      print('codeSize: $codeSize, dataItemNum: $dataItemNum, realSize: $realSize');
 
       return DatumSpecBlock(
         mnemonic: mnemonic,
