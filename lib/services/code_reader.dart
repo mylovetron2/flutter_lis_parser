@@ -5,12 +5,12 @@ import 'dart:math' as math;
 import '../constants/lis_constants.dart';
 
 class CodeReader {
-  static double readCode(Uint8List entry, int reprCode, int size) {
+  static dynamic readCode(Uint8List entry, int reprCode, int size) {
     switch (reprCode) {
       case 56: // Signed byte
         return _readSignedByte(entry);
-      case 65: // Character string - returns depth unit constant
-        return _readDepthUnit(entry, size);
+      case 65: // Character string - trả về chuỗi gốc
+        return String.fromCharCodes(entry.sublist(0, size)).trim();
       case 66: // Unsigned byte
         return entry[0].toDouble();
       case 68: // 32-bit float
@@ -166,6 +166,47 @@ class CodeReader {
     }
 
     return value;
+  }
+
+  /// Mã hóa số thực thành 4 byte kiểu float LIS (big endian)
+  static Uint8List encode32BitFloat(double value) {
+    // Xác định dấu
+    bool isNegative = value < 0;
+    double absValue = value.abs();
+    // Tìm E sao cho absValue = M * 2^(E - 128)
+    int E = 128;
+    double M = absValue;
+    if (absValue != 0) {
+      E = (math.log(absValue) / math.ln2 + 128).floor();
+      M = absValue / math.pow(2.0, E - 128);
+    }
+    // Tính mantissa (mPart)
+    int mPart = 0;
+    double remain = M;
+    List<double> factor = [
+      0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625,
+      0.001953125, 0.0009765625, 0.00048828125, 0.000244140625, 0.0001220703125,
+      0.00006103515625, 0.000030517578125, 0.0000152587890625, 0.00000762939453125,
+      0.000003814697265625, 0.0000019073486328125, 0.00000095367431640625,
+      0.000000476837158203125, 0.0000002384185791015625, 0.00000011920928955078125,
+    ];
+    for (int i = 0; i < 24; i++) {
+      if (remain >= factor[i]) {
+        mPart |= (1 << (23 - i));
+        remain -= factor[i];
+      }
+    }
+    // Nếu số âm, chuyển mantissa sang two's complement
+    if (isNegative) {
+      mPart = (~mPart + 1) & 0x7FFFFF;
+    }
+    // Tính byte1, byte2, byte3, byte4
+    int byte1 = isNegative ? 128 : 0;
+    byte1 |= ((E >> 1) & 0x7F);
+    int byte2 = ((E & 1) << 7) | ((mPart >> 16) & 0x7F);
+    int byte3 = (mPart >> 8) & 0xFF;
+    int byte4 = mPart & 0xFF;
+    return Uint8List.fromList([byte1, byte2, byte3, byte4]);
   }
 
   static double _read32BitInteger(Uint8List entry) {

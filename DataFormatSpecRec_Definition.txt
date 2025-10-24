@@ -1,0 +1,223 @@
+ĐỊNH NGHĨA ENTRYBLOCK - LIS FILE FORMAT
+=============================================
+
+EntryBlock là một cấu trúc dữ liệu quan trọng trong tệp LIS (Log Information Standard) 
+chứa các thông tin cấu hình và metadata về cách dữ liệu được tổ chức trong Data Format 
+Specification Record. Nó định nghĩa cách đọc và diễn giải dữ liệu từ các Data Record.
+
+CÁC TRƯỜNG DỮ LIỆU:
+===================
+
+1. nDataRecordType (int)
+   - Mô tả: Loại Data Record 
+   - Entry Block Type: 1
+   - Mặc định: 0
+
+2. nDatumSpecBlockType (int)
+   - Mô tả: Loại Datum Specification Block
+   - Entry Block Type: 2
+   - Mặc định: 0
+
+3. nDataFrameSize (int)
+   - Mô tả: Kích thước frame dữ liệu (tính bằng bytes)
+   - Entry Block Type: 3
+   - Mặc định: 0
+
+4. nDirection (int)
+   - Mô tả: Hướng đo dữ liệu
+   - Entry Block Type: 4
+   - Giá trị: 
+     * 1 = UP (hướng lên)
+     * 255 = DOWN (hướng xuống)
+   - Mặc định: 0
+
+5. nOpticalDepthUnit (int)
+   - Mô tả: Đơn vị độ sâu quang học
+   - Entry Block Type: 5
+   - Mặc định: 0
+
+6. fDataRefPoint (double)
+   - Mô tả: Điểm tham chiếu dữ liệu
+   - Entry Block Type: 6
+   - Mặc định: 0.0
+
+7. strDataRefPointUnit (String)
+   - Mô tả: Đơn vị của điểm tham chiếu dữ liệu
+   - Entry Block Type: 7
+   - Mặc định: ''
+
+8. fFrameSpacing (double)
+   - Mô tả: Khoảng cách giữa các frame
+   - Entry Block Type: 8
+   - Mặc định: 0.0
+
+9. strFrameSpacingUnit (String)
+   - Mô tả: Đơn vị của khoảng cách frame
+   - Entry Block Type: 9
+   - Mặc định: ''
+
+10. nMaxFramesPerRecord (int)
+    - Mô tả: Số frame tối đa trong một record
+    - Entry Block Type: 11
+    - Mặc định: 0
+
+11. fAbsentValue (double)
+    - Mô tả: Giá trị đại diện cho dữ liệu thiếu/không có
+    - Entry Block Type: 12
+    - Mặc định: -999.255
+
+12. nDepthRecordingMode (int)
+    - Mô tả: Chế độ ghi độ sâu
+    - Entry Block Type: 13
+    - Giá trị:
+      * 0 = Độ sâu được ghi trong frame
+      * 1 = Độ sâu được ghi riêng biệt
+    - Mặc định: 0
+
+13. strDepthUnit (String)
+    - Mô tả: Đơn vị đo độ sâu
+    - Entry Block Type: 14
+    - Mặc định: ''
+
+14. nDepthRepr (int)
+    - Mô tả: Representation Code cho dữ liệu độ sâu
+    - Entry Block Type: 15
+    - Mặc định: 68
+
+15. nDatumSpecBlockSubType (int)
+    - Mô tả: Kiểu con của Datum Specification Block
+    - Entry Block Type: 16
+    - Mặc định: 0
+
+CHỨC NĂNG VÀ ỨNG DỤNG:
+======================
+
+1. Cấu hình đọc dữ liệu: 
+   EntryBlock cung cấp thông tin cần thiết để đọc và diễn giải chính xác các Data Record
+
+2. Xử lý độ sâu: 
+   Định nghĩa cách độ sâu được ghi và đơn vị đo
+
+3. Tổ chức frame: 
+   Xác định kích thước và khoảng cách giữa các frame dữ liệu
+
+4. Hướng đo: 
+   Xác định hướng di chuyển của công cụ đo (lên hoặc xuống)
+
+5. Giá trị thiếu: 
+   Định nghĩa giá trị đại diện cho dữ liệu không có hoặc bị lỗi
+
+QUY TRÌNH XỬ LÝ:
+================
+
+1. EntryBlock được parse từ Data Format Specification Record
+2. Thông tin được sử dụng để cấu hình việc đọc Data Record
+3. Các trường được áp dụng trong quá trình tạo file DAT
+4. Đảm bảo dữ liệu được xử lý đúng theo chuẩn LIS
+
+CHI TIẾT KỸ THUẬT:
+==================
+
+- EntryBlock Type: Mỗi trường có một Entry Block Type ID riêng
+- Representation Code: Sử dụng các REPRCODE để đọc giá trị
+- Parsing: Được đọc tuần tự từ byteArray với các offset tương ứng
+- Validation: Kiểm tra giá trị hợp lệ trước khi sử dụng
+
+LIÊN KẾT VỚI CÁC THÀNH PHẦN KHÁC:
+=================================
+
+- DatumSpecBlock: Định nghĩa cấu trúc channel dữ liệu
+- Data Record: Chứa dữ liệu thực tế được đọc theo EntryBlock
+- Dataset: Sử dụng thông tin EntryBlock để tạo file DAT
+- LogicalFile: Chứa EntryBlock và các thành phần liên quan
+
+THÔNG TIN CHANNEL - DATUMSPECBLOCK:
+===================================
+
+Thông tin các channel được lấy từ DatumSpecBlock trong Data Format Specification Record.
+Mỗi channel được định nghĩa bởi một DatumSpecBlock với các thông tin sau:
+
+CẤU TRÚC DATUMSPECBLOCK:
+------------------------
+
+1. strMnemonic (String, 4 bytes)
+   - Tên ngắn gọn của channel (ví dụ: DEPT, GR, CALI)
+   - Đọc bằng REPRCODE_65
+
+2. strServiceID (String, 6 bytes)
+   - ID dịch vụ của channel
+   - Đọc bằng REPRCODE_65
+
+3. strServiceOrderNb (String, 8 bytes)
+   - Số thứ tự dịch vụ
+   - Đọc bằng REPRCODE_65
+
+4. strUnits (String, 4 bytes)
+   - Đơn vị đo của channel (ví dụ: M, GAPI, IN)
+   - Đọc bằng REPRCODE_65
+
+5. nFileNb (int, 2 bytes)
+   - Số file
+   - Đọc bằng REPRCODE_79
+
+6. nSize (int, 2 bytes)
+   - Kích thước dữ liệu của channel trong frame (bytes)
+   - Đọc bằng REPRCODE_79
+
+7. nNbSamples (int, 1 byte)
+   - Số sample của channel trong mỗi frame
+   - Đọc bằng REPRCODE_66
+
+8. nReprCode (int, 1 byte)
+   - Mã đại diện dữ liệu (49, 50, 56, 65, 66, 68, 70, 73, 79)
+   - Đọc bằng REPRCODE_66
+
+CÁC THÔNG TIN ĐƯỢC TÍNH TOÁN:
+-----------------------------
+
+9. nDataItemNum (int)
+   - Số data item cho mỗi sample
+   - Công thức: (nSize / getReprCodeSize(nReprCode)) / nNbSamples
+
+10. nOffsetInBytes (int)
+    - Vị trí bắt đầu của channel trong frame (bytes)
+    - Được tích lũy từ tổng nSize của các channel trước đó
+
+11. bFlwChan (bool)
+    - Đánh dấu channel có nhiều data item (>= 101)
+    - Thường dùng cho flowmeter data
+
+QUY TRÌNH PARSE CHANNEL:
+========================
+
+1. Đọc Data Format Specification Record
+2. Parse EntryBlock từ đầu record
+3. Parse từng DatumSpecBlock tiếp theo:
+   - Đọc tuần tự 4+6+8+4 bytes cho strings
+   - Bỏ qua 4 bytes API Codes
+   - Đọc 2+2 bytes cho nFileNb và nSize
+   - Bỏ qua 3 bytes Process Level
+   - Đọc 1+1 bytes cho nNbSamples và nReprCode
+   - Bỏ qua 5 bytes Process Indication
+4. Tính toán các trường phụ thuộc
+5. Thêm vào chansArr (List<DatumSpecBlock>)
+
+VỊ TRÍ TRONG FILE LIS:
+======================
+
+Data Format Specification Record → EntryBlock + DatumSpecBlock[]
+├── EntryBlock: Cấu hình chung cho logical file
+└── DatumSpecBlock[]: Định nghĩa từng channel
+    ├── Channel 0: DEPT (độ sâu)
+    ├── Channel 1: GR (gamma ray)
+    ├── Channel 2: CALI (caliper)
+    └── ... (các channel khác)
+
+SỬ DỤNG TRONG XỬ LÝ DATA:
+==========================
+
+1. Đọc Data Record: Sử dụng nOffsetInBytes để định vị dữ liệu channel
+2. Decode data: Sử dụng nReprCode để chuyển đổi bytes thành giá trị
+3. Tạo Dataset: Nhóm channel theo nNbSamples để tạo file DAT
+4. Hiển thị UI: Sử dụng strMnemonic và strUnits cho tên và đơn vị
+

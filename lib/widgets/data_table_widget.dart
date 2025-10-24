@@ -222,6 +222,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   }
 
   Future<void> _loadTableData() async {
+    // Có thể sử dụng entryBlock ở đây nếu cần cho logic bảng
     if (!widget.parser.isFileOpen) {
       setState(() {
         errorMessage = 'No file is currently open';
@@ -237,7 +238,10 @@ class _DataTableWidgetState extends State<DataTableWidget> {
     try {
       // Loading table data (silent)
 
-      columnNames = widget.parser.getColumnNames();
+  columnNames = widget.parser.getColumnNames();
+  // Ví dụ: debug in ra một số thông tin từ EntryBlock
+  print('EntryBlock DataFrameSize: ${widget.parser.entryBlock.nDataFrameSize}');
+  print('EntryBlock Direction: ${widget.parser.entryBlock.nDirection}');
       // Column names loaded
 
       if (columnNames.isEmpty) {
@@ -249,7 +253,8 @@ class _DataTableWidgetState extends State<DataTableWidget> {
         return;
       }
 
-      final data = await widget.parser.getTableData(maxRows: maxRows);
+  final data = await widget.parser.getTableData(maxRows: maxRows);
+  // Nếu muốn dùng entryBlock để custom hiển thị, có thể chỉnh sửa logic ở đây
       // Retrieved ${data.length} rows of data
 
       setState(() {

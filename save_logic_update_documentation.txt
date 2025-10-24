@@ -1,0 +1,235 @@
+================================================================================
+                  UPDATED SAVE LOGIC - DATA FORMAT SPEC
+                           Flutter LIS Parser
+                          Updated: 2025-10-21
+================================================================================
+
+🔄 MAJOR CHANGE: NON-DESTRUCTIVE SAVE TO NEW FILE
+================================================================================
+
+PREVIOUS BEHAVIOR:
+- Direct overwrite of original LIS file
+- Potentially dangerous file modification
+- No backup of original data
+- Risk of data loss on error
+
+NEW BEHAVIOR:
+- Creates new file with "_modified_spec" suffix
+- Preserves original file untouched
+- Safe file operations with backup
+- Updates internal file handle to new file
+
+================================================================================
+📁 NEW SAVE WORKFLOW
+================================================================================
+
+1. FILE NAME GENERATION:
+   Original: data.lis
+   New File: data_modified_spec.lis
+
+2. MEMORY-BASED MODIFICATION:
+   - Read entire original file into memory
+   - Create modifiedBytes copy
+   - Update DataFormatSpec bytes in memory
+   - Write complete modified file
+
+3. FILE HANDLE UPDATE:
+   - Close original file handle
+   - Open new file handle pointing to modified file
+   - Update fileName property
+   - Continue operations on new file
+
+================================================================================
+🛠️ TECHNICAL IMPLEMENTATION
+================================================================================
+
+METHOD: saveDataFormatSpecToLIS()
+LOCATION: lib/services/lis_file_parser.dart:19-85
+
+KEY CHANGES:
+1. File Naming:
+   ```dart
+   final extIndex = fileName.lastIndexOf('.');
+   final newFileName = extIndex > 0
+       ? '${fileName.substring(0, extIndex)}_modified_spec${fileName.substring(extIndex)}'
+       : '${fileName}_modified_spec';
+   ```
+
+2. Memory Operations:
+   ```dart
+   final originalBytes = await File(fileName).readAsBytes();
+   final modifiedBytes = Uint8List.fromList(originalBytes);
+   ```
+
+3. Byte-Level Updates:
+   ```dart
+   int dataOffset = recordStartPos;
+   if (fileType == LisConstants.fileTypeLis) {
+     dataOffset += 2; // Skip record length for Russian LIS
+   } else {
+     dataOffset += 6; // Skip header for NTI format
+   }
+   
+   final maxLength = min(specBytes.length, modifiedBytes.length - dataOffset);
+   for (int i = 0; i < maxLength; i++) {
+     modifiedBytes[dataOffset + i] = specBytes[i];
+   }
+   ```
+
+4. File Handle Management:
+   ```dart
+   await file!.close();
+   file = await File(newFileName).open(mode: FileMode.read);
+   fileName = newFileName;
+   ```
+
+================================================================================
+🎨 UI IMPROVEMENTS
+================================================================================
+
+SCREEN: DataFormatSpecDetailScreen
+LOCATION: lib/screens/data_format_spec_detail_screen.dart:47-75
+
+1. SUCCESS FEEDBACK:
+   - Shows new file name in SnackBar
+   - Extended duration (4 seconds)
+   - OK action button for dismissal
+
+2. ERROR HANDLING:
+   - Red SnackBar for failures
+   - Clear error messaging
+   - Success/failure differentiation
+
+3. BUTTON LABEL:
+   - Updated from "Lưu vào file LIS" 
+   - New: "Lưu vào file LIS mới"
+   - Reflects actual behavior
+
+================================================================================
+🔐 SAFETY IMPROVEMENTS
+================================================================================
+
+BEFORE (Risky):
+❌ Direct file overwrite
+❌ No backup mechanism
+❌ Data loss potential
+❌ No rollback capability
+
+AFTER (Safe):
+✅ Non-destructive operations
+✅ Original file preserved
+✅ New file creation
+✅ Error-safe operations
+✅ Bounds checking
+✅ Handle management
+
+================================================================================
+⚡ PERFORMANCE CHARACTERISTICS
+================================================================================
+
+MEMORY USAGE:
+- Loads entire file into memory
+- Creates copy for modifications
+- Memory = 2x file size during operation
+- Released after completion
+
+DISK I/O:
+- One read operation (original file)
+- One write operation (new file)
+- No seeking/multiple writes
+- Atomic file creation
+
+FILE SIZE:
+- New file = same size as original
+- No compression or optimization
+- Preserves exact LIS structure
+- Only DataFormatSpec record modified
+
+================================================================================
+🔄 BACKWARD COMPATIBILITY
+================================================================================
+
+API COMPATIBILITY:
+✅ Same method signature
+✅ Same return type (bool)
+✅ Same error handling pattern
+✅ Transparent to calling code
+
+BEHAVIOR CHANGES:
+⚠️ Creates new file instead of overwrite
+⚠️ fileName property changes to new file
+⚠️ Original file remains unchanged
+⚠️ File handle points to new file
+
+================================================================================
+🧪 TESTING SCENARIOS
+================================================================================
+
+1. NORMAL OPERATION:
+   - Load LIS file
+   - Edit DataFormatSpec
+   - Save successfully
+   - Verify new file created
+   - Verify original file unchanged
+
+2. ERROR CONDITIONS:
+   - Insufficient disk space
+   - Permission denied
+   - Invalid file paths
+   - Memory limitations
+
+3. EDGE CASES:
+   - Very large files
+   - Files without extension
+   - Read-only directories
+   - Network drives
+
+================================================================================
+📋 FUTURE ENHANCEMENTS
+================================================================================
+
+POTENTIAL IMPROVEMENTS:
+1. User confirmation dialog before save
+2. Custom file name input option
+3. Backup location configuration
+4. Progress indicator for large files
+5. Undo/redo functionality
+6. File comparison tools
+7. Automatic cleanup of old modified files
+
+ADVANCED FEATURES:
+1. Incremental saves
+2. File versioning system
+3. Compression options
+4. Cloud storage integration
+5. Collaborative editing
+6. Change tracking
+7. Audit logging
+
+================================================================================
+⚠️ IMPORTANT NOTES
+================================================================================
+
+1. MEMORY REQUIREMENTS:
+   - Requires 2x file size in RAM
+   - May not work for very large files
+   - Consider streaming for huge files
+
+2. DISK SPACE:
+   - Doubles storage requirement temporarily
+   - Original + modified file
+   - Clean up old files manually
+
+3. FILE PERMISSIONS:
+   - Needs write access to directory
+   - Original file remains read-only safe
+   - Check permissions before operation
+
+4. CONCURRENCY:
+   - Single-threaded operation
+   - No concurrent access protection
+   - External file locks respected
+
+================================================================================
+                            END OF DOCUMENTATION
+================================================================================

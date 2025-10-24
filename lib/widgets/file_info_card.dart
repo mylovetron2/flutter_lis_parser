@@ -8,7 +8,7 @@ class FileInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fileInfo = parser.fileInfo;
+  final fileInfo = parser.fileInfo;
 
     return Card(
       elevation: 4,
@@ -24,8 +24,8 @@ class FileInfoCard extends StatelessWidget {
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            _buildInfoRow('File Name', fileInfo['fileName']),
-            _buildInfoRow('File Type', fileInfo['fileType']),
+            _buildInfoRow('File Name', fileInfo['fileName'].toString()),
+            _buildInfoRow('File Type', fileInfo['fileType'].toString()),
             _buildInfoRow('Record Count', fileInfo['recordCount'].toString()),
             const Divider(height: 32),
             Text(
@@ -37,16 +37,16 @@ class FileInfoCard extends StatelessWidget {
             const SizedBox(height: 12),
             _buildInfoRow(
               'Start Depth',
-              '${fileInfo['startDepth']} ${fileInfo['depthUnit']}',
+              '${fileInfo['startDepth'].toString()} ${fileInfo['depthUnit'].toString()}',
             ),
             _buildInfoRow(
               'End Depth',
-              '${fileInfo['endDepth']} ${fileInfo['depthUnit']}',
+              '${fileInfo['endDepth'].toString()} ${fileInfo['depthUnit'].toString()}',
             ),
-            _buildInfoRow('Direction', fileInfo['direction']),
+            _buildInfoRow('Direction', fileInfo['direction'].toString()),
             _buildInfoRow(
               'Frame Spacing',
-              '${fileInfo['frameSpacing']} ${fileInfo['depthUnit']}',
+              '${fileInfo['frameSpacing'].toString()} ${fileInfo['depthUnit'].toString()}',
             ),
             const Divider(height: 32),
             Text(
@@ -56,18 +56,18 @@ class FileInfoCard extends StatelessWidget {
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-            _buildInfoRow('Depth Unit', fileInfo['depthUnit']),
+            _buildInfoRow('Depth Unit', fileInfo['depthUnit'].toString()),
             _buildInfoRow(
               'Data Frame Size',
-              parser.dataFormatSpec.dataFrameSize.toString(),
+              parser.entryBlock.nDataFrameSize.toString(),
             ),
             _buildInfoRow(
               'Depth Recording Mode',
-              parser.dataFormatSpec.depthRecordingMode.toString(),
+              parser.entryBlock.nDepthRecordingMode.toString(),
             ),
             _buildInfoRow(
               'Absent Value',
-              parser.dataFormatSpec.absentValue.toString(),
+              parser.entryBlock.fAbsentValue.toString(),
             ),
           ],
         ),

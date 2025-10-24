@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'data_format_spec_screen.dart';
+import 'entry_block_screen.dart' show EntryBlockScreen;
 import 'package:file_picker/file_picker.dart';
 import '../services/lis_file_parser.dart';
 import 'lis_viewer_screen.dart';
@@ -68,6 +70,15 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('LIS File Parser'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.memory),
+            tooltip: 'Xem 50 byte từ file',
+            onPressed: () {
+              Navigator.pushNamed(context, '/byte-viewer');
+            },
+          ),
+        ],
       ),
       body: Center(
         child: Padding(
@@ -111,6 +122,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     textStyle: const TextStyle(fontSize: 18),
                   ),
                 ),
+               const SizedBox(height: 16),
+               ElevatedButton(
+                 onPressed: () {
+                   // Điều hướng sang màn hình EntryBlockScreen
+                   Navigator.of(context).push(
+                     MaterialPageRoute(
+                       builder: (context) => EntryBlockScreen(entryBlock: _parser.entryBlock, parser: _parser),
+                     ),
+                   );
+                 },
+                 child: const Text('Xem EntryBlock'),
+               ),
               ],
               if (_errorMessage != null) ...[
                 const SizedBox(height: 24),

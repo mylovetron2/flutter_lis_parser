@@ -197,7 +197,7 @@ class LisFileParser {
   List<WellInfoBlock> toolBlocks = [];
   List<WellInfoBlock> chanBlocks = [];
 
-  // DataFormatSpec dataFormatSpec = DataFormatSpec(); // Đã thay bằng EntryBlock
+  DataFormatSpec dataFormatSpec = DataFormatSpec();
   EntryBlock entryBlock = EntryBlock();
 
   // File parsing indices
@@ -231,7 +231,7 @@ class LisFileParser {
     // LisFileParser constructor initialized
     byteData = Uint8List(200000); // Increase buffer size for larger records
     fileData = Float32List(60000);
-  // entryBlock = EntryBlock(); // EntryBlock đã khởi tạo ở trên
+    dataFormatSpec.init();
     entryBlock = EntryBlock();
   }
 
@@ -277,7 +277,7 @@ class LisFileParser {
       // Set step based on frame spacing (convert to milliseconds-based integer like original C++ lStep)
       // Keep step as an integer representing frame spacing in milliseconds (consistent with original logic)
       try {
-  final spacing = entryBlock.fFrameSpacing; // in original units
+        final spacing = dataFormatSpec.frameSpacing; // in original units
         // Convert to milliseconds similar to C++ logic: multiply by 1000
         step = (spacing * 1000).round();
       } catch (_) {
@@ -616,13 +616,13 @@ class LisFileParser {
       if (onProgress != null) onProgress(90);
 
       // Set some default values to prevent crashes
-  entryBlock.nDepthRepr = 68;
-  entryBlock.fFrameSpacing = 1.0;
-  entryBlock.nDirection = LisConstants.dirDown;
-  entryBlock.nDataFrameSize = 100; // Default frame size
+      dataFormatSpec.depthRepr = 68;
+      dataFormatSpec.frameSpacing = 1.0;
+      dataFormatSpec.direction = LisConstants.dirDown;
+      dataFormatSpec.dataFrameSize = 100; // Default frame size
 
       // Read data format specification and datum blocks
-  await _readDataFormatSpecification();
+      await _readDataFormatSpecification();
       await _findDataRecordRange();
 
       if (onProgress != null) onProgress(95);
@@ -1110,19 +1110,26 @@ class LisFileParser {
 
     print('Finished reading ${datumBlocks.length} Datum Spec Blocks');
 
-    // Update EntryBlock with calculated values
+    // Update DataFormatSpec with calculated values
+    dataFormatSpec.depthRepr = entryBlock.nDepthRepr;
+    dataFormatSpec.frameSpacing = entryBlock.fFrameSpacing;
+    dataFormatSpec.direction = entryBlock.nDirection;
+    dataFormatSpec.depthUnit = entryBlock.nOpticalDepthUnit;
+    dataFormatSpec.absentValue = entryBlock.fAbsentValue;
+    dataFormatSpec.depthRecordingMode = entryBlock.nDepthRecordingMode;
+
     // Calculate total frame size from datum blocks
     int totalFrameSize = 0;
     for (final datum in datumBlocks) {
       totalFrameSize += datum.size;
     }
-    if (entryBlock.nDepthRecordingMode == 0) {
+    if (dataFormatSpec.depthRecordingMode == 0) {
       // Add depth size for depth-per-frame mode
-      totalFrameSize += CodeReader.getCodeSize(entryBlock.nDepthRepr);
+      totalFrameSize += CodeReader.getCodeSize(dataFormatSpec.depthRepr);
     }
-    entryBlock.nDataFrameSize = totalFrameSize;
+    dataFormatSpec.dataFrameSize = totalFrameSize;
 
-    print('EntryBlock updated: frameSize=$totalFrameSize, depthRepr=${entryBlock.nDepthRepr}');
+    print('DataFormatSpec updated: frameSize=$totalFrameSize, depthRepr=${dataFormatSpec.depthRepr}');
 
   }
 
@@ -1275,7 +1282,7 @@ class LisFileParser {
   int _getStartDataRecordIdx() {
     for (int i = 0; i < lisRecords.length; i++) {
       final record = lisRecords[i];
-  if (record.type == 0 && record.length > entryBlock.nDataFrameSize) {
+      if (record.type == 0 && record.length > dataFormatSpec.dataFrameSize) {
         return i;
       }
     }
@@ -1285,7 +1292,7 @@ class LisFileParser {
   int _getEndDataRecordIdx() {
     for (int i = lisRecords.length - 1; i >= 0; i--) {
       final record = lisRecords[i];
-  if (record.type == 0 && record.length > entryBlock.nDataFrameSize) {
+      if (record.type == 0 && record.length > dataFormatSpec.dataFrameSize) {
         return i;
       }
     }
@@ -1301,11 +1308,11 @@ class LisFileParser {
     await file!.setPosition(record.addr + offset);
 
     final depthBytes = await file!.read(
-  CodeReader.getCodeSize(entryBlock.nDepthRepr),
+      CodeReader.getCodeSize(dataFormatSpec.depthRepr),
     );
     double depth = CodeReader.readCode(
       Uint8List.fromList(depthBytes),
-  entryBlock.nDepthRepr,
+      dataFormatSpec.depthRepr,
       depthBytes.length,
     );
 
@@ -1313,9 +1320,9 @@ class LisFileParser {
       '[DEBUG] StartDepth raw value: $depth, bytes: ${depthBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
     );
 
-  double convertedDepth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
+    double convertedDepth = _convertToMeter(depth, dataFormatSpec.depthUnit);
     print(
-  '[DEBUG] StartDepth converted to meter: $convertedDepth, unit: ${entryBlock.nOpticalDepthUnit}',
+      '[DEBUG] StartDepth converted to meter: $convertedDepth, unit: ${dataFormatSpec.depthUnit}',
     );
 
     return convertedDepth;
@@ -1330,21 +1337,21 @@ class LisFileParser {
     await file!.setPosition(record.addr + offset);
 
     final depthBytes = await file!.read(
-  CodeReader.getCodeSize(entryBlock.nDepthRepr),
+      CodeReader.getCodeSize(dataFormatSpec.depthRepr),
     );
     double depth = CodeReader.readCode(
       Uint8List.fromList(depthBytes),
-  entryBlock.nDepthRepr,
+      dataFormatSpec.depthRepr,
       depthBytes.length,
     );
 
-  depth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
+    depth = _convertToMeter(depth, dataFormatSpec.depthUnit);
 
-  int frameNum = record.length ~/ entryBlock.nDataFrameSize;
+    int frameNum = record.length ~/ dataFormatSpec.dataFrameSize;
 
-    if (entryBlock.nDirection == LisConstants.dirDown) {
+    if (dataFormatSpec.direction == LisConstants.dirDown) {
       depth += (frameNum - 1) * (step / 1000.0);
-    } else if (entryBlock.nDirection == LisConstants.dirUp) {
+    } else if (dataFormatSpec.direction == LisConstants.dirUp) {
       depth -= (frameNum - 1) * (step / 1000.0);
     }
 
@@ -1393,7 +1400,7 @@ class LisFileParser {
     toolBlocks.clear();
     chanBlocks.clear();
 
-  // entryBlock = EntryBlock(); // Nếu cần reset entryBlock
+    dataFormatSpec.init();
     isFileOpen = false;
   }
 
@@ -1411,9 +1418,9 @@ class LisFileParser {
     'recordCount': recordCount,
     'startDepth': startDepth.toStringAsFixed(2),
     'endDepth': endDepth.toStringAsFixed(2),
-  'direction': entryBlock.nDirection,
-  'frameSpacing': entryBlock.fFrameSpacing.toStringAsFixed(3),
-  'depthUnit': entryBlock.nOpticalDepthUnit,
+    'direction': dataFormatSpec.directionName,
+    'frameSpacing': dataFormatSpec.frameSpacing.toStringAsFixed(3),
+    'depthUnit': dataFormatSpec.depthUnitName,
   };
 
   // ==================== DATA READING METHODS ====================
@@ -1453,10 +1460,10 @@ class LisFileParser {
         await file!.setPosition(await file!.position() + 2);
 
         // Read depth
-  final depthRepr = entryBlock.nDepthRepr;
-  final depthSize = CodeReader.getCodeSize(depthRepr);
+        final depthRepr = dataFormatSpec.depthRepr;
+        final depthSize = CodeReader.getCodeSize(depthRepr);
         final depthBytes = await file!.read(depthSize);
-  currentDepth = CodeReader.readCode(depthBytes, depthRepr, depthSize);
+        currentDepth = CodeReader.readCode(depthBytes, depthRepr, depthSize);
 
         // Read data
         int index = 0;
@@ -1482,16 +1489,16 @@ class LisFileParser {
           }
         }
 
-  currentDepth = _convertToMeter(currentDepth, entryBlock.nOpticalDepthUnit);
+        currentDepth = _convertToMeter(currentDepth, dataFormatSpec.depthUnit);
 
         // Parse frames
-  final frameNum = getFrameNum(currentDataRec);
+        final frameNum = getFrameNum(currentDataRec);
         int byteDataIdx = 0;
         int fileDataIdx = 0;
 
         for (int frame = 0; frame < frameNum; frame++) {
           for (int i = 0; i < datumBlocks.length; i++) {
-            if (i == 0 && entryBlock.nDepthRecordingMode == 0) {
+            if (i == 0 && dataFormatSpec.depthRecordingMode == 0) {
               continue; // Skip depth in depth-per-frame mode
             }
 
@@ -1509,7 +1516,7 @@ class LisFileParser {
                 datum.size,
               );
               final finalValue =
-                  (value - entryBlock.fAbsentValue).abs() < 0.00001
+                  (value - dataFormatSpec.absentValue).abs() < 0.00001
                   ? double.nan
                   : value;
 
@@ -1533,10 +1540,10 @@ class LisFileParser {
                   datum.reprCode,
                   codeSize,
                 );
-        final finalValue =
-          (value - entryBlock.fAbsentValue).abs() < 0.00001
-          ? double.nan
-          : value;
+                final finalValue =
+                    (value - dataFormatSpec.absentValue).abs() < 0.00001
+                    ? double.nan
+                    : value;
 
                 if (fileDataIdx < fileData.length) {
                   fileData[fileDataIdx++] = finalValue;
@@ -1546,7 +1553,7 @@ class LisFileParser {
           }
 
           // Skip depth in depth-per-frame mode
-          if (entryBlock.nDepthRecordingMode == 0) {
+          if (dataFormatSpec.depthRecordingMode == 0) {
             byteDataIdx += 4; // Skip depth bytes
           }
         }
@@ -1592,14 +1599,14 @@ class LisFileParser {
 
         byteData.setRange(0, maxBytes, dataBytes);
 
-        final depthSize = CodeReader.getCodeSize(entryBlock.nDepthRepr);
+        final depthSize = CodeReader.getCodeSize(dataFormatSpec.depthRepr);
         final depthBytes = byteData.sublist(0, depthSize);
         currentDepth = CodeReader.readCode(
           depthBytes,
-          entryBlock.nDepthRepr,
+          dataFormatSpec.depthRepr,
           depthSize,
         );
-        currentDepth = _convertToMeter(currentDepth, entryBlock.nOpticalDepthUnit);
+        currentDepth = _convertToMeter(currentDepth, dataFormatSpec.depthUnit);
 
         // Parse frames for Russian format
         final frameNum = getFrameNum(currentDataRec);
@@ -1609,7 +1616,7 @@ class LisFileParser {
 
         for (int frame = 0; frame < frameNum; frame++) {
           for (int i = 0; i < datumBlocks.length; i++) {
-            if (i == 0 && entryBlock.nDepthRecordingMode == 0) {
+            if (i == 0 && dataFormatSpec.depthRecordingMode == 0) {
               print('Skipping depth datum at frame $frame, datum $i');
               continue; // Skip depth in depth-per-frame mode
             }
@@ -1643,10 +1650,10 @@ class LisFileParser {
                 datum.reprCode,
                 datum.size,
               );
-        final finalValue =
-          (value - entryBlock.fAbsentValue).abs() < 0.00001
-          ? double.nan
-          : value;
+              final finalValue =
+                  (value - dataFormatSpec.absentValue).abs() < 0.00001
+                  ? double.nan
+                  : value;
 
               if (fileDataIdx < fileData.length) {
                 fileData[fileDataIdx++] = finalValue;
@@ -1670,10 +1677,10 @@ class LisFileParser {
                   datum.reprCode,
                   codeSize, // Use codeSize instead of datum.size for individual elements
                 );
-        final finalValue =
-          (value - entryBlock.fAbsentValue).abs() < 0.00001
-          ? double.nan
-          : value;
+                final finalValue =
+                    (value - dataFormatSpec.absentValue).abs() < 0.00001
+                    ? double.nan
+                    : value;
 
                 if (fileDataIdx < fileData.length) {
                   fileData[fileDataIdx++] = finalValue;
@@ -1683,8 +1690,8 @@ class LisFileParser {
           }
 
           // Skip depth in depth-per-frame mode
-          if (entryBlock.nDepthRecordingMode == 0) {
-            final depthSize = CodeReader.getCodeSize(entryBlock.nDepthRepr);
+          if (dataFormatSpec.depthRecordingMode == 0) {
+            final depthSize = CodeReader.getCodeSize(dataFormatSpec.depthRepr);
             if (byteDataIdx + depthSize > actualDataSize) {
               break; // Exit frame loop if no more data
             }
@@ -1718,19 +1725,19 @@ class LisFileParser {
     if (fileType == LisConstants.fileTypeLis) {
       // Russian format
       recordLen -= 2; // Subtract 2 bytes
-      if (entryBlock.nDepthRecordingMode == 1) {
-        recordLen -= CodeReader.getCodeSize(entryBlock.nDepthRepr);
+      if (dataFormatSpec.depthRecordingMode == 1) {
+        recordLen -= CodeReader.getCodeSize(dataFormatSpec.depthRepr);
       }
     } else {
       // NTI format
       recordLen -= 6; // Subtract 6 bytes
-      if (entryBlock.nDepthRecordingMode == 1) {
-        recordLen -= CodeReader.getCodeSize(entryBlock.nDepthRepr);
+      if (dataFormatSpec.depthRecordingMode == 1) {
+        recordLen -= CodeReader.getCodeSize(dataFormatSpec.depthRepr);
       }
     }
 
-    if (entryBlock.nDataFrameSize > 0) {
-      return recordLen ~/ entryBlock.nDataFrameSize;
+    if (dataFormatSpec.dataFrameSize > 0) {
+      return recordLen ~/ dataFormatSpec.dataFrameSize;
     }
 
     return 0;
@@ -1745,7 +1752,7 @@ class LisFileParser {
 
     // Add curve columns
     for (var datum in datumBlocks) {
-      if (entryBlock.nDepthRecordingMode == 0 && datum.mnemonic == 'DEPT') {
+      if (dataFormatSpec.depthRecordingMode == 0 && datum.mnemonic == 'DEPT') {
         continue; // Skip DEPT in depth-per-frame mode
       }
 
@@ -1912,7 +1919,7 @@ class LisFileParser {
 
           // Calculate depth for this frame
           double frameDepth = startingDepth;
-          if (entryBlock.nDirection == LisConstants.dirDown) {
+          if (dataFormatSpec.direction == LisConstants.dirDown) {
             frameDepth += frame * (step / 1000.0);
           } else {
             frameDepth -= frame * (step / 1000.0);
@@ -1928,7 +1935,7 @@ class LisFileParser {
           int arrayElementsPerFrame = 0;
 
           for (var datum in datumBlocks) {
-            if (entryBlock.nDepthRecordingMode == 0 &&
+            if (dataFormatSpec.depthRecordingMode == 0 &&
                 datum.mnemonic == 'DEPT') {
               continue; // Skip DEPT in depth-per-frame mode
             }
@@ -2044,7 +2051,7 @@ class LisFileParser {
       int arrayElementsPerFrame = 0;
 
       for (var d in datumBlocks) {
-        if (entryBlock.nDepthRecordingMode == 0 && d.mnemonic == 'DEPT') {
+        if (dataFormatSpec.depthRecordingMode == 0 && d.mnemonic == 'DEPT') {
           continue; // Skip DEPT in depth-per-frame mode
         }
 
@@ -2062,7 +2069,7 @@ class LisFileParser {
       // Find the index for this specific column
       for (int i = 0; i < datumBlocks.length; i++) {
         final otherDatum = datumBlocks[i];
-        if (entryBlock.nDepthRecordingMode == 0 &&
+        if (dataFormatSpec.depthRecordingMode == 0 &&
             otherDatum.mnemonic == 'DEPT') {
           continue; // Skip DEPT in depth-per-frame mode
         }
@@ -2300,14 +2307,14 @@ class LisFileParser {
 
       // Add frame offset - BUT we need to use the ACTUAL frame size from data
       // Not the theoretical frameSize from spec
-      final frameSize = entryBlock.nDataFrameSize;
+      final frameSize = dataFormatSpec.dataFrameSize;
       byteOffset += frameIndex * frameSize;
       print(
         'DEBUG: After frame offset: byteOffset=$byteOffset (frameIndex=$frameIndex, frameSize=$frameSize)',
       );
 
       // Add datum offset within frame - match EXACT parsing logic
-      print('DEBUG: depthRecordingMode=${entryBlock.nDepthRecordingMode}');
+      print('DEBUG: depthRecordingMode=${dataFormatSpec.depthRecordingMode}');
       int datumOffset = 0;
 
       // CRITICAL: In parsing, byteDataIdx starts at 4 (after depth),

@@ -94,7 +94,7 @@ class _ChartScreenState extends State<ChartScreen> {
         int arrayElementsPerFrame = 0;
 
         for (var datum in curves) {
-          if (widget.parser.dataFormatSpec.depthRecordingMode == 0 &&
+          if (widget.parser.entryBlock.nDepthRecordingMode == 0 &&
               datum.mnemonic == 'DEPT') {
             continue; // Skip DEPT in depth-per-frame mode
           }
@@ -112,7 +112,7 @@ class _ChartScreenState extends State<ChartScreen> {
         for (int frame = 0; frame < frameNum; frame++) {
           // Calculate frame depth (same logic as table)
           double frameDepth = startingDepth;
-          if (widget.parser.dataFormatSpec.direction == LisConstants.dirDown) {
+          if (widget.parser.entryBlock.nDirection == LisConstants.dirDown) {
             frameDepth += frame * (widget.parser.step / 1000.0);
           } else {
             frameDepth -= frame * (widget.parser.step / 1000.0);
@@ -125,7 +125,7 @@ class _ChartScreenState extends State<ChartScreen> {
           // Find the index for this specific curve
           for (int i = 0; i < curveIndex; i++) {
             final otherDatum = curves[i];
-            if (widget.parser.dataFormatSpec.depthRecordingMode == 0 &&
+            if (widget.parser.entryBlock.nDepthRecordingMode == 0 &&
                 otherDatum.mnemonic == 'DEPT') {
               continue; // Skip DEPT in depth-per-frame mode
             }
