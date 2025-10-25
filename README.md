@@ -184,3 +184,30 @@ Như vậy, giá trị `'DEPTH'` cho từng dòng sẽ được tính toán lạ
 
 **Kết luận:**
 - `'DEPTH'` là giá trị đã được tính toán lại, không lấy trực tiếp từ dữ liệu gốc, giúp chuẩn hóa và đồng bộ dữ liệu cho các thao tác xử lý và hiển thị.
+
+### tableData Definition
+
+`tableData` is the main variable used to store parsed LIS data for display in the DataTable UI. It is typically structured as:
+
+```dart
+List<List<dynamic>> tableData;
+```
+
+- Each element of `tableData` is a row, containing values for each column (datum/curve) in the LIS file.
+- The number of columns matches the number of datum blocks (curves) defined in the file.
+- Values are parsed and converted to their correct types (float, int, string, ...), ready for display.
+- For array-type data (e.g., WF1, WF2), the cell may contain a summary, a clickable indicator, or a reference to the full array data (not all array values are shown directly in the table).
+
+**Example:**
+```dart
+tableData = [
+  [1000.0, 12.5, 8.2, '...', ...], // row 1: depth, value1, value2, array summary, ...
+  [1001.0, 13.0, 8.5, '...', ...], // row 2
+  ...
+];
+```
+
+- `tableData` is populated by calling a parser method (e.g. `getTableData()`), which processes raw LIS records and datum blocks into a display-ready format.
+- The UI uses `tableData` to render the DataTable, allowing for sorting, editing, and viewing details.
+
+See `lib/widgets/data_table_widget.dart` and `lib/services/lis_file_parser.dart` for implementation details.

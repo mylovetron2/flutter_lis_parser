@@ -134,6 +134,13 @@ class _HomeScreenState extends State<HomeScreen> {
                  },
                  child: const Text('Xem EntryBlock'),
                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/value-converter');
+                  },
+                  child: const Text('Value Converter'),
+                ),
               ],
               if (_errorMessage != null) ...[
                 const SizedBox(height: 24),

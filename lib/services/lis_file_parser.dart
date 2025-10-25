@@ -1,4 +1,4 @@
-import '../models/entry_block.dart';
+  import '../models/entry_block.dart';
 // LIS File Parser - converted from CLisFile C++ class
 
 import 'dart:io';
@@ -13,25 +13,43 @@ import '../constants/lis_constants.dart';
 import '../models/file_header_record.dart';
 import 'code_reader.dart';
 
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:math';
+import '../constants/lis_constants.dart';
+import 'code_reader.dart';
+
+  
+  
+  
+  
 class LisFileParser {
+  /// Trả về map tên cột -> reprCode dựa trên datumBlocks
+  Map<String, int> getColumnReprCodes(List<String> columnOrder) {
+    final Map<String, int> result = {};
+    for (final col in columnOrder) {
+      if (col == 'DEPTH') {
+        result[col] = entryBlock.nDepthRepr;
+      } else {
+        final datum = datumBlocks.firstWhere(
+          (d) => d.mnemonic == col,
+          orElse: () => DatumSpecBlock.empty(col),
+        );
+        result[col] = datum.reprCode;
+      }
+    }
+    return result;
+  }
   /// Mã hóa EntryBlock và lưu ra file LIS mới
   Future<bool> saveEntryBlockToNewFile(String newFilePath) async {
     try {
       final entryBlockBytes = encodeEntryBlock(entryBlock);
-      print('DEBUG: entryBlockBytes length: ${entryBlockBytes.length}');
-      print('DEBUG: entryBlockBytes hex trước lưu: ${entryBlockBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
-      // Đọc toàn bộ file gốc vào buffer
-      final originalFile = File(fileName);
-      final originalBytes = await originalFile.readAsBytes();
-      // Tính offset thực tế
-      int fileOffset = lisRecords[dataFSRIdx].addr + entryBlockOffset;
-      print('DEBUG: fileOffset calculation:');
-      print('  lisRecords[dataFSRIdx].addr = ${lisRecords[dataFSRIdx].addr}');
-      print('  entryBlockOffset = $entryBlockOffset');
-      print('  calculated fileOffset = $fileOffset');
-
-
-      fileOffset = lisRecords[dataFSRIdx].addr + 2;
+    // Đọc toàn bộ file gốc vào buffer
+    final originalFile = File(fileName);
+    final originalBytes = await originalFile.readAsBytes();
+    // Tính offset thực tế
+    int fileOffset = lisRecords[dataFSRIdx].addr + entryBlockOffset;
+    fileOffset = lisRecords[dataFSRIdx].addr + 2;
       // Ghi ra file mới
       final newBytes = Uint8List.fromList(originalBytes);
       for (int i = 0; i < entryBlockBytes.length; i++) {
@@ -314,12 +332,7 @@ class LisFileParser {
 
       // Read first 20 bytes to understand file structure
       final firstBytes = await file!.read(20);
-      print(
-        'First 20 bytes: ${firstBytes.map((b) => b.toString().padLeft(3)).join(' ')}',
-      );
-      print(
-        'First 20 bytes (hex): ${firstBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
-      );
+      // ...existing code...
 
       List<BlankRecord> tempBlankRecords = [];
 
@@ -424,7 +437,7 @@ class LisFileParser {
         // File type detected as NTI - insufficient blank records
       }
 
-      // File type detection completed
+  // ...existing code...
     } catch (e) {
       // Error in file type detection: $e
       fileType = LisConstants.fileTypeNti; // Default to NTI on error
@@ -639,13 +652,9 @@ class LisFileParser {
     if (file == null) return;
 
     try {
-      print('Starting Russian LIS format parsing...');
-      await file!.setPosition(0);
-
-      blankRecords.clear();
-      print('[LisFileParser] _openLIS: blankRecords cleared');
-      lisRecords.clear();
-      print('[LisFileParser] _openLIS: lisRecords cleared');
+  await file!.setPosition(0);
+  blankRecords.clear();
+  lisRecords.clear();
 
       // Read Blank Table Content (similar to C++ OpenLIS)
       int currentAddr = 0;
@@ -761,13 +770,7 @@ class LisFileParser {
       }
 
       lisRecords = tempRecords;
-      print(
-        '[LisFileParser] After parse: lisRecords.length = ${lisRecords.length}',
-      );
-      print(
-        '[LisFileParser] Before save: lisRecords.length = ${lisRecords.length}',
-      );
-      print('Parsed ${lisRecords.length} LIS records');
+      // ...existing code...
 
       // Read data format specification and datum blocks
       await _readDataFormatSpecification();
@@ -782,42 +785,34 @@ class LisFileParser {
 
   // Read Data Format Specification Record (converted from C++ ReadDataFormatSpecificationRecord)
   Future<void> _readDataFormatSpecification() async {
-    print(
-      '_readDataFormatSpecification called: dataFSRIdx=$dataFSRIdx, lisRecords.length=${lisRecords.length}',
-    );
+    // ...existing code...
 
     if (dataFSRIdx < 0 || dataFSRIdx >= lisRecords.length) {
-      print(
-        'Data Format Specification record not found: dataFSRIdx=$dataFSRIdx',
-      );
+      // ...existing code...
 
       // Try to find it manually
       for (int i = 0; i < lisRecords.length; i++) {
         final record = lisRecords[i];
-        print('Record $i: type=${record.type}, name=${record.name}');
+  // ...existing code...
         if (record.type == 64) {
-          print('Found Data Format Specification at index $i');
+    // ...existing code...
           dataFSRIdx = i;
           break;
         }
       }
 
       if (dataFSRIdx < 0) {
-        print(
-          'No Data Format Specification record found in ${lisRecords.length} records',
-        );
+        // ...existing code...
         return;
       }
     }
 
     try {
       final lisRecord = lisRecords[dataFSRIdx];
-      print(
-        'Reading DataFormatSpec record: addr=${lisRecord.addr}, length=${lisRecord.length}, type=${lisRecord.type}',
-      );
+      // ...existing code...
 
       await file!.setPosition(lisRecord.addr);
-      print('Set file position to ${lisRecord.addr}');
+  // ...existing code...
 
       Uint8List recordData;
 
@@ -827,53 +822,53 @@ class LisFileParser {
         recordData = Uint8List.fromList(await file!.read(recordLen));
       } else {
         // NTI format - handle multi-block
-        print('NTI format: moving to position ${lisRecord.addr + 2}');
+  // ...existing code...
         await file!.setPosition(lisRecord.addr + 2);
 
         // Read size
         final sizeBytes = await file!.read(4);
-        print('Size bytes: ${sizeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+  // ...existing code...
 
         int recordLen = sizeBytes[1] + sizeBytes[0] * 256;
         int continueFlag = sizeBytes[3];
-        print('Record length: $recordLen, continue flag: $continueFlag');
+  // ...existing code...
 
         await file!.setPosition(await file!.position() + 2);
-        print('Skipped type, now at position ${await file!.position()}');
+  // ...existing code...
 
         List<int> allData = [];
         recordLen = recordLen - 2; // DFSR chỉ có 2 byte header
-        print('Adjusted record length: $recordLen');
+  // ...existing code...
 
         if (continueFlag == 1) {
-          print('Multi-block record detected');
+          // ...existing code...
           while (true) {
-            print('Reading $recordLen bytes');
+            // ...existing code...
             final data = await file!.read(recordLen);
             allData.addAll(data);
-            print('Read ${data.length} bytes, total: ${allData.length}');
+            // ...existing code...
 
             final nextSizeBytes = await file!.read(4);
             recordLen = nextSizeBytes[1] + nextSizeBytes[0] * 256;
             recordLen = recordLen - 4;
             continueFlag = nextSizeBytes[3];
-            print('Next block: length=$recordLen, continue=$continueFlag');
+            // ...existing code...
 
             if (continueFlag == 2) {
-              print('End of multi-block record detected');
+              // ...existing code...
               break;
             }
           }
         } else {
-          print('Single block record, reading $recordLen bytes');
+          // ...existing code...
           final data = await file!.read(recordLen);
           allData.addAll(data);
-          print('Read ${data.length} bytes');
+          // ...existing code...
         }
 
         // Chỉ tạo recordData từ allData.sublist(2) để loại bỏ 2 byte đầu
         recordData = Uint8List.fromList(allData.length > 2 ? allData.sublist(2) : []);
-        print('Total record data: ${recordData.length} bytes');
+  // ...existing code...
       }
 
       // Parse the data format specification
@@ -886,8 +881,7 @@ class LisFileParser {
 
   // Parse Data Format Specification data (converted from C++ logic)
   Future<void> _parseDataFormatSpec(Uint8List data) async {
-    print('_parseDataFormatSpec called with ${data.length} bytes');
-    // Debug: In ra giá trị raw của EntryBlock (từ đầu đến khi gặp entryType == 0)
+  // ...existing code...
   int rawIdx = 0;
   List<int> entryBlockRaw = [];
   // Lưu lại offset entryBlock (tính từ đầu file DataFormatSpec record)
@@ -910,9 +904,7 @@ class LisFileParser {
       entryBlockRaw.addAll(data.sublist(rawIdx + 3, rawIdx + 3 + size));
       rawIdx += 3 + size;
     }
-    print(
-      'RAW ENTRYBLOCK BYTES: ${entryBlockRaw.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
-    );
+    // ...existing code...
     int index = 0;
     entryBlock = EntryBlock();
     int entryFieldCount = 0;
@@ -921,29 +913,21 @@ class LisFileParser {
       if (index >= data.length) break;
       final entryType = data[index++];
       if (entryType == 0) {
-        print(
-          'DEBUG: entryFieldCount=$entryFieldCount, index=$index, entryType=0 (end)',
-        );
+        // ...existing code...
         break; // End of entry blocks
       }
       if (index + 1 >= data.length) {
-        print(
-          'DEBUG: entryFieldCount=$entryFieldCount, index=$index, out of bounds for size/reprCode',
-        );
+        // ...existing code...
         break;
       }
       final size = data[index++];
       final reprCode = data[index++];
       if (index + size > data.length) {
-        print(
-          'DEBUG: entryFieldCount=$entryFieldCount, index=$index, size=$size, reprCode=$reprCode, out of bounds for entryData',
-        );
+        // ...existing code...
         break;
       }
       final entryData = data.sublist(index, index + size);
-      print(
-        'DEBUG: entryFieldCount=$entryFieldCount, index=$index, entryType=$entryType, size=$size, reprCode=$reprCode, entryData=${entryData.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
-      );
+      // ...existing code...
       index += size;
       entryFieldCount++;
       final value = CodeReader.readCode(entryData, reprCode, size);
@@ -956,7 +940,7 @@ class LisFileParser {
           break;
         case 3:
           entryBlock.nDataFrameSize = value is num ? value.toInt() : 0;
-          print('Set nDataFrameSize to ${entryBlock.nDataFrameSize}');
+          // ...existing code...
           break;
         case 4:
           entryBlock.nDirection = value is num ? value.toInt() : 0;
@@ -1001,13 +985,13 @@ class LisFileParser {
     //Đọc Datum Spec Blocks
     // Đọc Datum Spec Blocks
     datumBlocks.clear();
-    print('Starting to read Datum Spec Blocks from index $index');
+  // ...existing code...
 
     int nCurPos = index+3;
     int nTotalSize = data.length;
     int offset = 0;
 
-    print('nCurPos=$nCurPos, nTotalSize=$nTotalSize');
+  // ...existing code...
 
     while (nCurPos < nTotalSize) {
       if (nTotalSize - nCurPos < 40) {
@@ -1015,35 +999,35 @@ class LisFileParser {
         break;
       }
 
-      print('Reading DatumSpecBlock at position $nCurPos');
+  // ...existing code...
       
       // Read mnemonic (4 bytes, repr code 65 - ASCII)
       if (nCurPos + 4 > nTotalSize) break;
       final mnemonicBytes = data.sublist(nCurPos, nCurPos + 4);
       String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
       nCurPos += 4;
-      print('Mnemonic: "$mnemonic"');
+  // ...existing code...
 
       // Read service ID (6 bytes, repr code 65 - ASCII)
       if (nCurPos + 6 > nTotalSize) break;
       final serviceIdBytes = data.sublist(nCurPos, nCurPos + 6);
       String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
       nCurPos += 6;
-      print('ServiceID: "$serviceId"');
+  // ...existing code...
 
       // Read service order number (8 bytes, repr code 65 - ASCII)
       if (nCurPos + 8 > nTotalSize) break;
       final serviceOrderBytes = data.sublist(nCurPos, nCurPos + 8);
       String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
       nCurPos += 8;
-      print('ServiceOrderNb: "$serviceOrderNb"');
+  // ...existing code...
 
       // Read units (4 bytes, repr code 65 - ASCII)
       if (nCurPos + 4 > nTotalSize) break;
       final unitsBytes = data.sublist(nCurPos, nCurPos + 4);
       String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
       nCurPos += 4;
-      print('Units: "$units"');
+  // ...existing code...
 
       // Skip API Codes (4 bytes)
       nCurPos += 4;
@@ -1053,14 +1037,14 @@ class LisFileParser {
       final fileNbBytes = data.sublist(nCurPos, nCurPos + 2);
       int fileNb = fileNbBytes[1] + (fileNbBytes[0] << 8); // Big endian
       nCurPos += 2;
-      print('FileNb: $fileNb');
+  // ...existing code...
 
       // Read size (2 bytes, repr code 79 - 16-bit integer)
       if (nCurPos + 2 > nTotalSize) break;
       final sizeBytes = data.sublist(nCurPos, nCurPos + 2);
       int size = sizeBytes[1] + (sizeBytes[0] << 8); // Big endian
       nCurPos += 2;
-      print('Size: $size');
+  // ...existing code...
 
       // Skip Process Level (3 bytes)
       nCurPos += 3;
@@ -1069,13 +1053,13 @@ class LisFileParser {
       if (nCurPos + 1 > nTotalSize) break;
       int nbSamples = data[nCurPos];
       nCurPos += 1;
-      print('NbSamples: $nbSamples');
+  // ...existing code...
 
       // Read representation code (1 byte, repr code 66 - 8-bit integer)
       if (nCurPos + 1 > nTotalSize) break;
       int reprCode = data[nCurPos];
       nCurPos += 1;
-      print('ReprCode: $reprCode');
+  // ...existing code...
 
       // Skip Process Indication (5 bytes)
       nCurPos += 5;
@@ -1085,7 +1069,7 @@ class LisFileParser {
       final dataItemNum = nbSamples > 0 ? (size ~/ codeSize) ~/ nbSamples : (size ~/ codeSize);
       final realSize = dataItemNum;
 
-      print('CodeSize: $codeSize, DataItemNum: $dataItemNum, RealSize: $realSize');
+  // ...existing code...
 
       // Create DatumSpecBlock
       final datumSpecBlock = DatumSpecBlock(
@@ -1105,10 +1089,10 @@ class LisFileParser {
       datumBlocks.add(datumSpecBlock);
       offset += size;
 
-      print('Added DatumSpecBlock: ${datumSpecBlock.mnemonic}, offset updated to $offset');
+  // ...existing code...
     }
 
-    print('Finished reading ${datumBlocks.length} Datum Spec Blocks');
+  // ...existing code...
 
     // Update EntryBlock with calculated values
     // Calculate total frame size from datum blocks
@@ -1122,77 +1106,56 @@ class LisFileParser {
     }
     entryBlock.nDataFrameSize = totalFrameSize;
 
-    print('EntryBlock updated: frameSize=$totalFrameSize, depthRepr=${entryBlock.nDepthRepr}');
+  // ...existing code...
 
   }
 
   // Parse individual Datum Spec Block (converted from C++ logic)
   DatumSpecBlock? _parseDatumSpecBlock(Uint8List data, int offset) {
     try {
-      print('DatumSpecBlock raw bytes: ' + data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       int index = 0;
 
       final mnemonicBytes = data.sublist(index, index + 4);
-      print('mnemonicBytes: ' + mnemonicBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 4;
       String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
-      print('mnemonic: $mnemonic');
 
       if (offset > 0 && mnemonic == 'DEPT') {
         mnemonic = 'DEP1';
       }
 
       final serviceIdBytes = data.sublist(index, index + 6);
-      print('serviceIdBytes: ' + serviceIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 6;
       String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
-      print('serviceId: $serviceId');
 
       final serviceOrderBytes = data.sublist(index, index + 8);
-      print('serviceOrderBytes: ' + serviceOrderBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 8;
       String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
-      print('serviceOrderNb: $serviceOrderNb');
 
       final unitsBytes = data.sublist(index, index + 4);
-      print('unitsBytes: ' + unitsBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 4;
       String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
-      print('units: $units');
 
       final apiCodeBytes = data.sublist(index, index + 4);
-      print('apiCodeBytes (skip): ' + apiCodeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 4;
 
       final fileNb = data[index] * 256 + data[index + 1];
-      print('fileNbBytes: ' + data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 2;
-      print('fileNb: $fileNb');
 
       final size = data[index] * 256 + data[index + 1];
-      print('sizeBytes: ' + data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 2;
-      print('size: $size');
 
       final skip3Bytes = data.sublist(index, index + 3);
-      print('skip3Bytes: ' + skip3Bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 3;
 
       final nbSample = data[index];
-      print('nbSampleByte: ' + data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 1;
-      print('nbSample: $nbSample');
 
       final reprCode = data[index];
-      print('reprCodeByte: ' + data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
       index += 1;
-      print('reprCode: $reprCode');
 
       final codeSize = CodeReader.getCodeSize(reprCode);
       final dataItemNum = size ~/ codeSize;
       final realSize = dataItemNum ~/ (nbSample > 0 ? nbSample : 1);
-
-      print('codeSize: $codeSize, dataItemNum: $dataItemNum, realSize: $realSize');
 
       return DatumSpecBlock(
         mnemonic: mnemonic,
@@ -1208,7 +1171,6 @@ class LisFileParser {
         realSize: realSize,
       );
     } catch (e) {
-      print('Error parsing datum spec block: $e');
       return null;
     }
   }
@@ -1309,14 +1271,7 @@ class LisFileParser {
       depthBytes.length,
     );
 
-    print(
-      '[DEBUG] StartDepth raw value: $depth, bytes: ${depthBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
-    );
-
-  double convertedDepth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
-    print(
-  '[DEBUG] StartDepth converted to meter: $convertedDepth, unit: ${entryBlock.nOpticalDepthUnit}',
-    );
+    double convertedDepth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
 
     return convertedDepth;
   }
@@ -1380,12 +1335,9 @@ class LisFileParser {
     }
 
     // Clear all data
-    blankRecords.clear();
-    print('[LisFileParser] closeLisFile: blankRecords cleared');
-    lisRecords.clear();
-    print('[LisFileParser] closeLisFile: lisRecords cleared');
-    datumBlocks.clear();
-    print('[LisFileParser] closeLisFile: datumBlocks cleared');
+  blankRecords.clear();
+  lisRecords.clear();
+  datumBlocks.clear();
     consBlocks.clear();
     outpBlocks.clear();
     ak73Blocks.clear();
@@ -1856,14 +1808,9 @@ class LisFileParser {
 
   // Get data for table display
   Future<List<Map<String, dynamic>>> getTableData({int maxRows = 1000}) async {
-    print(
-      'getTableData called: isFileOpen=$isFileOpen, startDataRec=$startDataRec, endDataRec=$endDataRec',
-    );
-    print('datumBlocks count: ${datumBlocks.length}');
-    print('dataFSRIdx: $dataFSRIdx');
+    // ...existing code...
 
     if (!isFileOpen) {
-      print('File not open');
       return [];
     }
 
@@ -1872,10 +1819,6 @@ class LisFileParser {
 
     // If we have no real data, create sample data for testing
     if (startDataRec < 0 || endDataRec < 0 || datumBlocks.isEmpty) {
-      print(
-        'Creating sample data: startDataRec=$startDataRec, endDataRec=$endDataRec, datumBlocks=${datumBlocks.length}',
-      );
-
       // Create sample data
       for (int i = 0; i < maxRows.clamp(0, 50); i++) {
         Map<String, dynamic> row = {};
@@ -1888,8 +1831,6 @@ class LisFileParser {
 
         tableData.add(row);
       }
-
-      print('Created ${tableData.length} sample rows');
       return tableData;
     }
 
@@ -1984,7 +1925,7 @@ class LisFileParser {
         }
       }
     } catch (e) {
-      print('Error generating table data: $e');
+      // ...existing code...
     }
 
     return tableData;
@@ -1999,7 +1940,7 @@ class LisFileParser {
   }) async {
     try {
       if (!isFileOpen) {
-        print('[updateDataValue] File not open for updating');
+  // ...existing code...
         return false;
       }
 
@@ -2011,31 +1952,27 @@ class LisFileParser {
 
       // Skip array data for safety, but ALLOW DEPTH/DEPT update
       if (datum.size > 4) {
-        print('[updateDataValue] Cannot update array data for $columnName');
+  // ...existing code...
         return false;
       }
 
       // Get the actual record index in the data records range
       final actualRecordIndex = startDataRec + recordIndex;
       if (actualRecordIndex < startDataRec || actualRecordIndex > endDataRec) {
-        print(
-          '[updateDataValue] Record index out of range: $actualRecordIndex (start=$startDataRec, end=$endDataRec)',
-        );
+        // ...existing code...
         return false;
       }
 
       // Calculate the position in the raw data
       final allData = await getAllData(actualRecordIndex);
       if (allData.isEmpty) {
-        print('[updateDataValue] No data found for record $actualRecordIndex');
+  // ...existing code...
         return false;
       }
 
       final frameNum = getFrameNum(actualRecordIndex);
       if (frameIndex >= frameNum) {
-        print(
-          '[updateDataValue] Frame index out of range: $frameIndex >= $frameNum',
-        );
+        // ...existing code...
         return false;
       }
 
@@ -2079,18 +2016,12 @@ class LisFileParser {
       }
 
       if (currentIndex >= allData.length) {
-        print(
-          '[updateDataValue] Data index out of bounds: $currentIndex >= ${allData.length}',
-        );
+        // ...existing code...
         return false;
       }
 
       // Store the change for later file writing
       final changeKey = '${actualRecordIndex}_${frameIndex}_$columnName';
-      // DEBUG: In ra index, frame, value trước khi push vào pending changes
-      print(
-        '[DEBUG][PENDING][BEFORE] recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, newValue=$newValue, oldValue=${allData[currentIndex]}, changeKey=$changeKey',
-      );
       if (!_pendingChanges.containsKey(changeKey)) {
         _pendingChanges[changeKey] = {
           'recordIndex': actualRecordIndex,
@@ -2101,23 +2032,17 @@ class LisFileParser {
           'newValue': newValue,
           'datum': datum,
         };
-        print(
-          '[updateDataValue] Stored pending change: $changeKey = $newValue (was ${allData[currentIndex]})',
-        );
+        // ...existing code...
       } else {
         // Update existing pending change
         _pendingChanges[changeKey]!['newValue'] = newValue;
-        print(
-          '[updateDataValue] Updated pending change: $changeKey = $newValue',
-        );
+        // ...existing code...
       }
       // DEBUG: In ra index, frame, value sau khi push vào pending changes
-      print(
-        '[DEBUG][PENDING][AFTER] recordIndex=$recordIndex (actual=$actualRecordIndex), frameIndex=$frameIndex, newValue=${_pendingChanges[changeKey]!['newValue']}, changeKey=$changeKey',
-      );
+      // ...existing code...
       return true;
     } catch (e) {
-      print('[updateDataValue] Error updating data value: $e');
+  // ...existing code...
       return false;
     }
   }
@@ -2548,4 +2473,53 @@ class LisFileParser {
     );
     return encoded;
   }
+  /// Lưu dataRecord type 0 vào file LIS, chuyển đổi dữ liệu theo reprCode
+  /// Lưu tableData ra file, chuyển từng giá trị thành bytes theo reprCode của từng cột
+Future<void> saveDataRecordsType0ToLIS({
+  required List<Map<String, dynamic>> tableData,
+  required List<String> columnOrder,
+  required Map<String, int> columnReprCodes,
+  required File fileLIS,
+}) async {
+  final raf = await fileLIS.open(mode: FileMode.write);
+  for (int rowIdx = 0; rowIdx < tableData.length; rowIdx++) {
+    final row = tableData[rowIdx];
+    for (final col in columnOrder) {
+      final value = row[col];
+      final reprCode = columnReprCodes[col] ?? 68;
+      Uint8List bytes;
+      switch (reprCode) {
+        case 68: // 32-bit float
+          bytes = CodeReader.encode32BitFloat(
+            value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0.0,
+          );
+          break;
+        case 73: // 32-bit int
+          int v = value is int ? value : int.tryParse(value.toString()) ?? 0;
+          final bd = ByteData(4)..setInt32(0, v, Endian.big);
+          bytes = bd.buffer.asUint8List();
+          break;
+        case 79: // 16-bit int
+          int v = value is int ? value : int.tryParse(value.toString()) ?? 0;
+          final bd = ByteData(2)..setInt16(0, v, Endian.big);
+          bytes = bd.buffer.asUint8List();
+          break;
+        case 65: // String
+          String s = value.toString();
+          bytes = Uint8List.fromList(s.padRight(4).codeUnits.take(4).toList());
+          break;
+        default:
+          bytes = CodeReader.encode32BitFloat(
+            value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0.0,
+          );
+      }
+      // Debug: In ra dạng byte
+      // Debug: In ra giá trị trước khi mã hóa thành bytes
+      print('[DEBUG][SAVE][VALUE] rowIdx=$rowIdx col=$col value=$value reprCode=$reprCode');
+      print('[DEBUG][SAVE][BYTES] rowIdx=$rowIdx col=$col bytes=' + bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      await raf.writeFrom(bytes);
+    }
+  }
+  await raf.close();
+}
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 import 'screens/byte_viewer_screen.dart';
+import 'screens/value_converter_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -24,6 +25,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       routes: {
         '/byte-viewer': (context) => const ByteViewerScreen(),
+        '/value-converter': (context) => const ValueConverterScreen(),
       },
     );
   }

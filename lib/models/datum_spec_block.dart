@@ -1,6 +1,21 @@
 // DatumSpecBlock model - converted from CDatumSpecBlk C++ class
 
 class DatumSpecBlock {
+  factory DatumSpecBlock.empty(String mnemonic) {
+    return DatumSpecBlock(
+      mnemonic: mnemonic,
+      serviceId: '',
+      serviceOrderNb: '',
+      units: '',
+      fileNb: 0,
+      size: 4,
+      nbSample: 1,
+      reprCode: 68,
+      offset: 0,
+      dataItemNum: 1,
+      realSize: 1,
+    );
+  }
   final String mnemonic;
   final String serviceId;
   final String serviceOrderNb;
