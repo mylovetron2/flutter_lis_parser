@@ -1,7 +1,6 @@
 // ...existing code...
  
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -10,7 +9,7 @@ import 'value_converter_screen.dart';
 
  bool _showOnlyDiff = false;
 class ByteViewerScreen extends StatefulWidget {
-  const ByteViewerScreen({Key? key}) : super(key: key);
+  const ByteViewerScreen({super.key});
 
   @override
   State<ByteViewerScreen> createState() => _ByteViewerScreenState();
@@ -28,12 +27,14 @@ class _ByteViewerScreenState extends State<ByteViewerScreen> {
   final TextEditingController _addressController2 = TextEditingController();
   List<List<int>>? _byteRows2;
   String? _error2;
-  bool _showConverter = false;
+  final bool _showConverter = false;
 
   Future<void> _readBytes() async {
   final addressStr = _addressController.text.trim();
+  final addressStr2 = _addressController2.text.trim();
   final lengthStr = _lengthController.text.trim();
   int? address = int.tryParse(addressStr);
+  int? address2 = int.tryParse(addressStr2);
   int? length = int.tryParse(lengthStr);
     // Panel trái
     setState(() {
@@ -71,7 +72,7 @@ class _ByteViewerScreenState extends State<ByteViewerScreen> {
       _byteRows2 = null;
     });
     final filePath2 = _filePathController2.text.trim();
-    if (filePath2.isEmpty || address == null || length == null || length <= 0) {
+    if (filePath2.isEmpty || address2 == null || length == null || length <= 0) {
       setState(() {
         _error2 = 'Vui lòng nhập đúng đường dẫn, địa chỉ và số byte.';
       });
@@ -79,7 +80,7 @@ class _ByteViewerScreenState extends State<ByteViewerScreen> {
       try {
         final file = File(filePath2);
         final raf = await file.open();
-        await raf.setPosition(address);
+        await raf.setPosition(address2);
         final bytes = await raf.read(length);
         await raf.close();
         List<List<int>> rows = [];
@@ -204,13 +205,34 @@ class _ByteViewerScreenState extends State<ByteViewerScreen> {
                               Row(
                                 children: [
                                   Expanded(
-                                    child: TextField(
-                                      controller: _addressController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Địa chỉ vật lý (offset)',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      keyboardType: TextInputType.number,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        TextField(
+                                          controller: _addressController,
+                                          decoration: const InputDecoration(
+                                            labelText: 'Địa chỉ vật lý trái (offset)',
+                                            border: OutlineInputBorder(),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 18),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        TextField(
+                                          controller: _addressController2,
+                                          decoration: const InputDecoration(
+                                            labelText: 'Địa chỉ vật lý phải (offset)',
+                                            border: OutlineInputBorder(),
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                        ),
+                                      ],
                                     ),
                                   ),
                                   const SizedBox(width: 18),
@@ -308,24 +330,31 @@ class _ByteViewerScreenState extends State<ByteViewerScreen> {
                                             scrollDirection: Axis.vertical,
                                             child: DataTable(
                                               columnSpacing: 24,
-                                              headingRowColor: MaterialStateProperty.all(Colors.indigo[50]),
+                                              headingRowColor: WidgetStateProperty.all(Colors.indigo[50]),
                                               columns: const [
-                                                DataColumn(label: Text('Địa chỉ', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold))),
+                                                DataColumn(label: Text('Địa chỉ trái', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold))),
                                                 DataColumn(label: Text('File trái', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold))),
+                                                DataColumn(label: Text('Địa chỉ phải', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold))),
                                                 DataColumn(label: Text('File phải', style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold))),
                                               ],
                                               rows: List.generate(_byteRows1!.length, (idx) {
-                                                final addr = int.tryParse(_addressController.text.trim()) ?? 0;
-                                                final offset = addr + idx * 8;
+                                                final addrLeft = int.tryParse(_addressController.text.trim()) ?? 0;
+                                                final addrRight = int.tryParse(_addressController2.text.trim()) ?? 0;
+                                                final offsetLeft = addrLeft + idx * 8;
+                                                final offsetRight = addrRight + idx * 8;
                                                 final left = _byteRows1![idx].map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-                                                final right = idx < _byteRows2!.length ? _byteRows2![idx].map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ') : '';
+                                                String right = '';
+                                                if (_byteRows2 != null && idx < _byteRows2!.length) {
+                                                  right = _byteRows2![idx].map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+                                                }
                                                 final isDiff = left != right;
                                                 if (_showOnlyDiff && !isDiff) return null;
                                                 return DataRow(
-                                                  color: MaterialStateProperty.resolveWith<Color?>((states) => isDiff ? Colors.yellow[100] : null),
+                                                  color: WidgetStateProperty.resolveWith<Color?>((states) => isDiff ? Colors.yellow[100] : null),
                                                   cells: [
-                                                    DataCell(Text(offset.toString().padLeft(8, '0'), style: const TextStyle(fontFamily: 'monospace'))),
+                                                    DataCell(Text(offsetLeft.toString().padLeft(8, '0'), style: const TextStyle(fontFamily: 'monospace'))),
                                                     DataCell(Text(left, style: const TextStyle(fontFamily: 'monospace'))),
+                                                    DataCell(Text(offsetRight.toString().padLeft(8, '0'), style: const TextStyle(fontFamily: 'monospace'))),
                                                     DataCell(Text(right, style: const TextStyle(fontFamily: 'monospace'))),
                                                   ],
                                                 );

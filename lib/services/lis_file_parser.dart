@@ -1,29 +1,362 @@
-  import '../models/entry_block.dart';
-// LIS File Parser - converted from CLisFile C++ class
-
 import 'dart:io';
+import 'dart:math' as math;
+// Removed unused import 'dart:math'
 import 'dart:typed_data';
-import 'dart:math';
-import '../models/lis_record.dart';
+
+import '../constants/lis_constants.dart';
 import '../models/blank_record.dart';
 import '../models/datum_spec_block.dart';
-import '../models/well_info_block.dart';
-import '../models/data_format_spec.dart';
-import '../constants/lis_constants.dart';
+import '../models/entry_block.dart';
 import '../models/file_header_record.dart';
+import '../models/lis_record.dart';
+import '../models/well_info_block.dart';
 import 'code_reader.dart';
 
-import 'dart:io';
-import 'dart:typed_data';
-import 'dart:math';
-import '../constants/lis_constants.dart';
-import 'code_reader.dart';
-
-  
-  
-  
-  
 class LisFileParser {
+  /// Ghi tableData ra file LIS mới, tự động tạo tên file mới dựa trên file gốc và thời gian
+  Future<bool> saveTableDataToNewFileAuto(
+    List<Map<String, dynamic>> tableData,
+  ) async {
+    if (file == null || tableData.isEmpty) {
+      print('[DEBUG][SAVE] file is null hoặc tableData rỗng');
+      return false;
+    }
+
+    // Đọc toàn bộ file gốc vào buffer
+    final originalFile = File(fileName);
+    final originalBytes = await originalFile.readAsBytes();
+    // Tạo tên file mới
+    final now = DateTime.now();
+    final baseName = fileName.split(Platform.pathSeparator).last;
+    final dirName = fileName.substring(
+      0,
+      fileName.lastIndexOf(Platform.pathSeparator),
+    );
+    final extIdx = baseName.lastIndexOf('.');
+    final namePart = extIdx > 0 ? baseName.substring(0, extIdx) : baseName;
+    final extPart = extIdx > 0 ? baseName.substring(extIdx) : '.LIS';
+    final timeStr =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    final newFileName =
+        '$dirName${Platform.pathSeparator}${namePart}_saved_$timeStr$extPart';
+    // Lấy danh sách các record type 0
+    final dataRecords = lisRecords.where((r) => r.type == 0).toList();
+    if (dataRecords.isEmpty) {
+      print('[DEBUG][SAVE] Không tìm thấy dataRecords type 0');
+      return false;
+    }
+    // Tính số frame cho mỗi record
+    int totalFrames = 0;
+    final framesPerRecord = <int>[];
+    for (int i = 0; i < dataRecords.length; i++) {
+      final frameNum = getFrameNum(startDataRec + i);
+      if (i == 0) {
+        print('[DEBUG][SAVE] Frame num record 0: $frameNum');
+      }
+      framesPerRecord.add(frameNum);
+      totalFrames += frameNum;
+    }
+    print(
+      '[DEBUG][SAVE] Tổng số frame: $totalFrames, tableData.length=${tableData.length}, dataRecords.length=${dataRecords.length}',
+    );
+    if (tableData.length != totalFrames) {
+      print(
+        '[DEBUG][SAVE][CẢNH BÁO] tableData.length (${tableData.length}) != tổng số frame ($totalFrames)',
+      );
+    }
+    int rowIdx = 0;
+    for (int recIdx = 0; recIdx < dataRecords.length; recIdx++) {
+      final record = dataRecords[recIdx];
+      final frameNum = framesPerRecord[recIdx];
+      final recordBytes = <int>[];
+      //Xử lý Ghi 4 byte Depth đầu tiên (dùng entryBlock.nDepthRepr)
+      // 1. Ghi 4 byte Depth đầu tiên (dùng entryBlock.nDepthRepr)
+      /*
+        final depthValue = row['DEPTH'];
+        final depthRepr = entryBlock.nDepthRepr;
+        final depthSize = CodeReader.getCodeSize(depthRepr);
+        try {
+          if (depthValue == null ||
+              (depthValue is String && depthValue == 'NULL')) {
+            recordBytes.addAll(
+              CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
+            );
+          } else if (depthValue is num) {
+            recordBytes.addAll(
+              CodeReader.encode32BitFloat(depthValue.toDouble()),
+            );
+          } else if (depthValue is String) {
+            final parsed = double.tryParse(depthValue);
+            if (parsed != null) {
+              recordBytes.addAll(CodeReader.encode32BitFloat(parsed));
+            } else {
+              recordBytes.addAll(
+                CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
+              );
+            }
+          } else {
+            recordBytes.addAll(
+              CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
+            );
+          }
+        } catch (e) {
+          recordBytes.addAll(
+            CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
+          );
+        }*/
+      // 2. Ghi các frameData
+      for (int frame = 0; frame < frameNum; frame++) {
+        if (rowIdx >= tableData.length) {
+          print('[DEBUG][SAVE][CẢNH BÁO] rowIdx vượt quá tableData.length');
+          break;
+        }
+        final row = tableData[rowIdx];
+        // Ghi các trường dữ liệu cho từng frame
+        for (final col in getColumnNames()) {
+          if (col == 'DEPTH') continue; // DEPTH đã được ghi riêng
+          final value = row[col];
+          final datum = datumBlocks.firstWhere(
+            (d) => d.mnemonic == col,
+            orElse: () => DatumSpecBlock.empty(col),
+          );
+          final reprCode = datum.reprCode;
+          final size = datum.size;
+
+          try {
+            // Xử lý trường kiểu mảng (array)
+            if (value is Map &&
+                value['isArray'] == true &&
+                value['data'] is List) {
+              final codeSize = CodeReader.getCodeSize(reprCode);
+              final arr = value['data'] as List;
+              final numElements = size ~/ codeSize;
+              print(
+                '[DEBUG][SAVE][ARRAY] col=$col reprCode=$reprCode size=$size codeSize=$codeSize numElements=$numElements',
+              );
+              for (int i = 0; i < numElements; i++) {
+                final element = (i < arr.length && arr[i] != null)
+                    ? arr[i]
+                    : entryBlock.fAbsentValue;
+                final encoded = CodeReader.encode(
+                  element is num ? element : entryBlock.fAbsentValue,
+                  reprCode,
+                  codeSize,
+                );
+                recordBytes.addAll(encoded);
+              }
+              continue;
+            }
+
+            // Xử lý giá trị null hoặc 'NULL'
+            if (value == null || (value is String && value == 'NULL')) {
+              final encoded = CodeReader.encode(
+                entryBlock.fAbsentValue,
+                reprCode,
+                CodeReader.getCodeSize(reprCode),
+              );
+              recordBytes.addAll(encoded);
+              continue;
+            }
+
+            // Xử lý giá trị kiểu số
+            if (value is num) {
+              final encoded = CodeReader.encode(
+                value,
+                reprCode,
+                CodeReader.getCodeSize(reprCode),
+              );
+              recordBytes.addAll(encoded);
+              continue;
+            }
+
+            // Xử lý giá trị kiểu chuỗi
+            if (value is String) {
+              final parsed = double.tryParse(value);
+              if (parsed != null) {
+                // Chuỗi là số, encode như số
+                final encoded = CodeReader.encode(
+                  parsed,
+                  reprCode,
+                  CodeReader.getCodeSize(reprCode),
+                );
+                recordBytes.addAll(encoded);
+                continue;
+              } else if (reprCode == 65) {
+                // Chuỗi không phải số, encode dạng ASCII nếu reprCode là 65
+                final encoded = CodeReader.encode(value, reprCode, size);
+                recordBytes.addAll(encoded);
+                continue;
+              }
+            }
+
+            // Nếu không khớp bất kỳ trường hợp nào, ghi absent value
+            final encoded = CodeReader.encode(
+              entryBlock.fAbsentValue,
+              reprCode,
+              CodeReader.getCodeSize(reprCode),
+            );
+            recordBytes.addAll(encoded);
+          } catch (e) {
+            // Nếu có lỗi khi encode, ghi absent value
+            recordBytes.addAll(
+              CodeReader.encode(
+                entryBlock.fAbsentValue,
+                reprCode,
+                CodeReader.getCodeSize(reprCode),
+              ),
+            );
+          }
+        }
+        rowIdx++;
+      }
+
+      // Ghi recordBytes vào buffer gốc
+      final start = record.addr + 2 + 4;
+      final end = start + recordBytes.length;
+      if (recIdx == 1) {
+        print('RecordLength=${recordBytes.length}, start=$start, end=$end');
+        print(
+          'FirstRecordBytes=${recordBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).take(50).join(' ')}',
+        );
+      }
+      if (end <= originalBytes.length) {
+        for (int i = 0; i < recordBytes.length; i++) {
+          originalBytes[start + i] = recordBytes[i];
+        }
+      } else {
+        print(
+          '[DEBUG][SAVE][CẢNH BÁO] Không đủ dung lượng để ghi recordBytes vào file gốc',
+        );
+      }
+    }
+    // Ghi ra file mới
+    await File(newFileName).writeAsBytes(originalBytes);
+    print(
+      '[DEBUG][SAVE] Đã ghi xong tất cả dataRecords và frame vào file mới: $newFileName',
+    );
+    return true;
+  }
+  // LIS File Parser - converted from CLisFile C++ class
+
+  /// Lưu tableData vào các data record (type 0), tự động xử lý nhiều frame/record
+  Future<bool> saveTableDataToRecords(
+    List<Map<String, dynamic>> tableData,
+  ) async {
+    if (file == null || tableData.isEmpty) {
+      print('[DEBUG][SAVE] file is null hoặc tableData rỗng');
+      return false;
+    }
+    // Lấy danh sách các record type 0
+    final dataRecords = lisRecords.where((r) => r.type == 0).toList();
+    if (dataRecords.isEmpty) {
+      print('[DEBUG][SAVE] Không tìm thấy dataRecords type 0');
+      return false;
+    }
+
+    // Tính số frame cho mỗi record
+    int totalFrames = 0;
+    final framesPerRecord = <int>[];
+    for (int i = 0; i < dataRecords.length; i++) {
+      final frameNum = getFrameNum(startDataRec + i);
+      framesPerRecord.add(frameNum);
+      totalFrames += frameNum;
+    }
+    print(
+      '[DEBUG][SAVE] Tổng số frame: $totalFrames, tableData.length=${tableData.length}, dataRecords.length=${dataRecords.length}',
+    );
+
+    if (tableData.length != totalFrames) {
+      print(
+        '[DEBUG][SAVE][CẢNH BÁO] tableData.length (${tableData.length}) != tổng số frame ($totalFrames)',
+      );
+      // Có thể cảnh báo nhưng vẫn tiếp tục nếu tableData đủ hoặc dư
+    }
+
+    int rowIdx = 0;
+    for (int recIdx = 0; recIdx < dataRecords.length; recIdx++) {
+      final record = dataRecords[recIdx];
+      final frameNum = framesPerRecord[recIdx];
+      final recordBytes = <int>[];
+      for (int frame = 0; frame < frameNum; frame++) {
+        if (rowIdx >= tableData.length) {
+          print('[DEBUG][SAVE][CẢNH BÁO] rowIdx vượt quá tableData.length');
+          break;
+        }
+        final row = tableData[rowIdx];
+        for (final col in getColumnNames()) {
+          final value = row[col];
+          final datum = datumBlocks.firstWhere(
+            (d) => d.mnemonic == col,
+            orElse: () => DatumSpecBlock.empty(col),
+          );
+          final reprCode = datum.reprCode;
+          final size = datum.size;
+          try {
+            print(
+              '[DEBUG][SAVE] recIdx=$recIdx frame=$frame col=$col value=$value reprCode=$reprCode size=$size',
+            );
+            // Nếu là array (kiểu Map), ghi absent value cho toàn bộ phần tử
+            if (value is Map && value['isArray'] == true) {
+              // Số phần tử array
+              final codeSize = CodeReader.getCodeSize(reprCode);
+              final numElements = size ~/ codeSize;
+              final absentVal = entryBlock.fAbsentValue;
+              for (int i = 0; i < numElements; i++) {
+                final encoded = CodeReader.encode32BitFloat(absentVal);
+                recordBytes.addAll(encoded);
+              }
+              continue;
+            }
+            // Nếu là NULL, ghi absent value
+            if (value == null || (value is String && value == 'NULL')) {
+              final encoded = CodeReader.encode32BitFloat(
+                entryBlock.fAbsentValue,
+              );
+              recordBytes.addAll(encoded);
+              continue;
+            }
+            // Nếu là số, ghi bình thường
+            if (value is num) {
+              final encoded = CodeReader.encode32BitFloat(value.toDouble());
+              recordBytes.addAll(encoded);
+              continue;
+            }
+            // Nếu là String số, chuyển sang double
+            if (value is String) {
+              final parsed = double.tryParse(value);
+              if (parsed != null) {
+                final encoded = CodeReader.encode32BitFloat(parsed);
+                recordBytes.addAll(encoded);
+                continue;
+              }
+            }
+            // Trường hợp khác, ghi absent value
+            final encoded = CodeReader.encode32BitFloat(
+              entryBlock.fAbsentValue,
+            );
+            recordBytes.addAll(encoded);
+          } catch (e) {
+            print(
+              '[DEBUG][SAVE][ERROR] recIdx=$recIdx frame=$frame col=$col value=$value error=$e',
+            );
+            recordBytes.addAll(
+              CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
+            );
+          }
+        }
+        rowIdx++;
+      }
+      print(
+        '[DEBUG][SAVE][BYTES] recIdx=$recIdx bytes=${recordBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
+      await file!.setPosition(record.addr + 2); // +2 để bỏ qua header
+      await file!.writeFrom(Uint8List.fromList(recordBytes));
+    }
+    await file!.flush();
+    print('[DEBUG][SAVE] Đã ghi xong tất cả dataRecords và frame');
+    return true;
+  }
+
   /// Trả về map tên cột -> reprCode dựa trên datumBlocks
   Map<String, int> getColumnReprCodes(List<String> columnOrder) {
     final Map<String, int> result = {};
@@ -40,16 +373,17 @@ class LisFileParser {
     }
     return result;
   }
+
   /// Mã hóa EntryBlock và lưu ra file LIS mới
   Future<bool> saveEntryBlockToNewFile(String newFilePath) async {
     try {
       final entryBlockBytes = encodeEntryBlock(entryBlock);
-    // Đọc toàn bộ file gốc vào buffer
-    final originalFile = File(fileName);
-    final originalBytes = await originalFile.readAsBytes();
-    // Tính offset thực tế
-    int fileOffset = lisRecords[dataFSRIdx].addr + entryBlockOffset;
-    fileOffset = lisRecords[dataFSRIdx].addr + 2;
+      // Đọc toàn bộ file gốc vào buffer
+      final originalFile = File(fileName);
+      final originalBytes = await originalFile.readAsBytes();
+      // Tính offset thực tế
+      int fileOffset = lisRecords[dataFSRIdx].addr + entryBlockOffset;
+      fileOffset = lisRecords[dataFSRIdx].addr + 2;
       // Ghi ra file mới
       final newBytes = Uint8List.fromList(originalBytes);
       for (int i = 0; i < entryBlockBytes.length; i++) {
@@ -64,6 +398,7 @@ class LisFileParser {
       return false;
     }
   }
+
   /// Ghi đè EntryBlock đã mã hóa vào file LIS
   Future<bool> saveEntryBlock() async {
     if (file == null) return false;
@@ -75,6 +410,7 @@ class LisFileParser {
     await file!.flush();
     return true;
   }
+
   /// Mã hóa EntryBlock thành Uint8List để ghi lại vào file LIS
   Uint8List encodeEntryBlock(EntryBlock entryBlock) {
     final bytes = <int>[];
@@ -92,12 +428,12 @@ class LisFileParser {
     bytes.add(66);
     bytes.add(entryBlock.nDatumSpecBlockType & 0xFF);
 
-  // Trường 3: nDataFrameSize (2 byte, reprCode 79, big endian)
-  bytes.add(3);
-  bytes.add(2);
-  bytes.add(79); // 2 byte int
-  bytes.add((entryBlock.nDataFrameSize >> 8) & 0xFF); // byte cao
-  bytes.add(entryBlock.nDataFrameSize & 0xFF);        // byte thấp
+    // Trường 3: nDataFrameSize (2 byte, reprCode 79, big endian)
+    bytes.add(3);
+    bytes.add(2);
+    bytes.add(79); // 2 byte int
+    bytes.add((entryBlock.nDataFrameSize >> 8) & 0xFF); // byte cao
+    bytes.add(entryBlock.nDataFrameSize & 0xFF); // byte thấp
 
     // Trường 4: nDirection
     bytes.add(4);
@@ -115,7 +451,8 @@ class LisFileParser {
     bytes.add(6);
     bytes.add(4);
     bytes.add(68);
-    final refPointBytes = ByteData(4)..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
+    final refPointBytes = ByteData(4)
+      ..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
     bytes.addAll(refPointBytes.buffer.asUint8List());
 
     // Trường 7: strDataRefPointUnit (4 byte ASCII, reprCode 65)
@@ -136,7 +473,9 @@ class LisFileParser {
     bytes.add(9);
     bytes.add(4);
     bytes.add(65);
-    final spacingUnitBytes = entryBlock.strFrameSpacingUnit.padRight(4).codeUnits;
+    final spacingUnitBytes = entryBlock.strFrameSpacingUnit
+        .padRight(4)
+        .codeUnits;
     bytes.addAll(spacingUnitBytes.take(4));
 
     // Trường 11: nMaxFramesPerRecord (1 byte int, reprCode 66)
@@ -249,7 +588,7 @@ class LisFileParser {
     // LisFileParser constructor initialized
     byteData = Uint8List(200000); // Increase buffer size for larger records
     fileData = Float32List(60000);
-  // entryBlock = EntryBlock(); // EntryBlock đã khởi tạo ở trên
+    // entryBlock = EntryBlock(); // EntryBlock đã khởi tạo ở trên
     entryBlock = EntryBlock();
   }
 
@@ -286,7 +625,8 @@ class LisFileParser {
       if (onProgress != null) onProgress(30);
 
       if (fileType == LisConstants.fileTypeNti) {
-        await _openNTI(onProgress);
+        //await _openNTI(onProgress);
+        await _openLIS(onProgress);
       } else {
         await _openLIS(onProgress);
       }
@@ -295,7 +635,7 @@ class LisFileParser {
       // Set step based on frame spacing (convert to milliseconds-based integer like original C++ lStep)
       // Keep step as an integer representing frame spacing in milliseconds (consistent with original logic)
       try {
-  final spacing = entryBlock.fFrameSpacing; // in original units
+        final spacing = entryBlock.fFrameSpacing; // in original units
         // Convert to milliseconds similar to C++ logic: multiply by 1000
         step = (spacing * 1000).round();
       } catch (_) {
@@ -330,8 +670,7 @@ class LisFileParser {
       // Starting file type detection...
       await file!.setPosition(0);
 
-      // Read first 20 bytes to understand file structure
-      final firstBytes = await file!.read(20);
+      // Removed unused local variable 'firstBytes'
       // ...existing code...
 
       List<BlankRecord> tempBlankRecords = [];
@@ -437,213 +776,10 @@ class LisFileParser {
         // File type detected as NTI - insufficient blank records
       }
 
-  // ...existing code...
+      // ...existing code...
     } catch (e) {
       // Error in file type detection: $e
       fileType = LisConstants.fileTypeNti; // Default to NTI on error
-    }
-  }
-
-  Future<void> _openNTI(Function(double)? onProgress) async {
-    if (file == null) return;
-
-    try {
-      // Starting NTI parsing
-      await file!.setPosition(0);
-      int currentPos = 0;
-      int fileLength = await file!.length();
-      int recordIndex = 0;
-      int maxRecords = 1000; // Safety limit
-
-      // File length: $fileLength bytes
-
-      // Read first 20 bytes to understand structure
-      final firstBytes = await file!.read(20);
-      // First 20 bytes read
-
-      // Check if first 8 bytes are zeros (header/padding)
-      bool hasZeroHeader = firstBytes.take(8).every((b) => b == 0);
-      if (hasZeroHeader) {
-        // Detected zero header, starting from position 8
-        currentPos = 8; // Skip potential header
-      } else {
-        // No zero header detected, starting from position 0
-        currentPos = 0;
-      }
-
-      // LIS format uses Blank Record Headers (16 bytes) followed by Data Records
-      // Reset position to start
-      currentPos = 0;
-
-      while (currentPos < fileLength - 16 && recordIndex < maxRecords) {
-        try {
-          await file!.setPosition(currentPos);
-
-          if (onProgress != null) {
-            double progress = 30 + (currentPos / fileLength) * 60; // 30-90%
-            onProgress(progress);
-          }
-
-          // Read Blank Record Header (16 bytes)
-          final blankHeader = await file!.read(16);
-          if (blankHeader.length < 16) {
-            // Insufficient blank header bytes
-            break;
-          }
-
-          // Parse Blank Record Header
-          // Bytes 0-3: Record length (little endian) - value not used here
-
-          // Bytes 8-11: Next record address (little endian)
-          int nextAddr =
-              blankHeader[8] +
-              (blankHeader[9] << 8) +
-              (blankHeader[10] << 16) +
-              (blankHeader[11] << 24);
-
-          // Bytes 12-13: Next record length (big endian)
-          int nextRecLength = (blankHeader[12] << 8) + blankHeader[13];
-
-          // Record $recordIndex at pos $currentPos
-
-          // Move to data record (right after 16-byte blank header)
-          int dataPos = currentPos + 16;
-
-          // Read data record
-          if (nextRecLength > 0 && dataPos + nextRecLength <= fileLength) {
-            await file!.setPosition(dataPos);
-            final dataBytes = await file!.read(
-              min(nextRecLength, 6),
-            ); // Read first few bytes for type
-
-            if (dataBytes.length >= 2) {
-              int type =
-                  dataBytes[0] + (dataBytes[1] << 8); // Type in little endian
-
-              // Data Record: type=$type, length=$nextRecLength
-
-              // Determine record name
-              String recordName = _getRecordName(type, dataPos);
-
-              // Store record indices
-              _storeRecordIndices(type, recordName, recordIndex);
-
-              final lisRecord = LisRecord(
-                type: type,
-                addr: dataPos,
-                length: nextRecLength,
-                name: recordName,
-                blockNum: 1,
-              );
-
-              lisRecords.add(lisRecord);
-
-              // Nếu là File Header Record (type 128) thì parse và lưu vào fileHeaderRecords
-              if (type == 128) {
-                await file!.setPosition(dataPos);
-                final recordBytes = await file!.read(nextRecLength);
-                final fileName = String.fromCharCodes(
-                  recordBytes.sublist(2, 12),
-                ).trim();
-                final serviceName = String.fromCharCodes(
-                  recordBytes.sublist(12, 18),
-                ).trim();
-                final fileNumber = String.fromCharCodes(
-                  recordBytes.sublist(19, 22),
-                ).trim();
-                final serviceSubLevelName = String.fromCharCodes(
-                  recordBytes.sublist(24, 30),
-                ).trim();
-                final versionNumber = String.fromCharCodes(
-                  recordBytes.sublist(30, 38),
-                ).trim();
-                final year =
-                    int.tryParse(
-                      String.fromCharCodes(recordBytes.sublist(38, 40)).trim(),
-                    ) ??
-                    0;
-                final month =
-                    int.tryParse(
-                      String.fromCharCodes(recordBytes.sublist(41, 43)).trim(),
-                    ) ??
-                    0;
-                final day =
-                    int.tryParse(
-                      String.fromCharCodes(recordBytes.sublist(44, 46)).trim(),
-                    ) ??
-                    0;
-                final maxPhysicalRecordLength = String.fromCharCodes(
-                  recordBytes.sublist(47, 52),
-                ).trim();
-                final fileTypeStr = String.fromCharCodes(
-                  recordBytes.sublist(57, 59),
-                ).trim();
-                final previousFileName = String.fromCharCodes(
-                  recordBytes.sublist(61, 71),
-                ).trim();
-                fileHeaderRecords.add(
-                  FileHeaderRecord(
-                    address: dataPos,
-                    length: nextRecLength,
-                    logicalIndex: recordIndex,
-                    physicalIndex: 0,
-                    fileName: fileName,
-                    serviceName: serviceName,
-                    fileNumber: fileNumber,
-                    serviceSubLevelName: serviceSubLevelName,
-                    versionNumber: versionNumber,
-                    year: year,
-                    month: month,
-                    day: day,
-                    maxPhysicalRecordLength: maxPhysicalRecordLength,
-                    fileType: fileTypeStr,
-                    previousFileName: previousFileName,
-                  ),
-                );
-              }
-
-              // Store important record indices
-              _storeRecordIndices(type, recordName, lisRecords.length - 1);
-            }
-          }
-
-          // Move to next record
-          if (nextAddr > 0 && nextAddr < fileLength) {
-            currentPos = nextAddr;
-          } else {
-            // If nextAddr is invalid, try sequential reading
-            currentPos = dataPos + nextRecLength;
-          }
-
-          recordIndex++;
-        } catch (e) {
-          // Error processing record $recordIndex: $e
-          // Try to continue from next position
-          currentPos += 16; // Skip to next potential blank header
-          continue;
-        }
-      }
-
-      // Processed $recordIndex records
-
-      if (onProgress != null) onProgress(90);
-
-      // Set some default values to prevent crashes
-  entryBlock.nDepthRepr = 68;
-  entryBlock.fFrameSpacing = 1.0;
-  entryBlock.nDirection = LisConstants.dirDown;
-  entryBlock.nDataFrameSize = 100; // Default frame size
-
-      // Read data format specification and datum blocks
-  await _readDataFormatSpecification();
-      await _findDataRecordRange();
-
-      if (onProgress != null) onProgress(95);
-
-      print('NTI parsing completed');
-    } catch (e) {
-      print('Error in _openNTI: $e');
-      rethrow;
     }
   }
 
@@ -652,9 +788,9 @@ class LisFileParser {
     if (file == null) return;
 
     try {
-  await file!.setPosition(0);
-  blankRecords.clear();
-  lisRecords.clear();
+      await file!.setPosition(0);
+      blankRecords.clear();
+      lisRecords.clear();
 
       // Read Blank Table Content (similar to C++ OpenLIS)
       int currentAddr = 0;
@@ -793,9 +929,9 @@ class LisFileParser {
       // Try to find it manually
       for (int i = 0; i < lisRecords.length; i++) {
         final record = lisRecords[i];
-  // ...existing code...
+        // ...existing code...
         if (record.type == 64) {
-    // ...existing code...
+          // ...existing code...
           dataFSRIdx = i;
           break;
         }
@@ -812,7 +948,7 @@ class LisFileParser {
       // ...existing code...
 
       await file!.setPosition(lisRecord.addr);
-  // ...existing code...
+      // ...existing code...
 
       Uint8List recordData;
 
@@ -822,23 +958,23 @@ class LisFileParser {
         recordData = Uint8List.fromList(await file!.read(recordLen));
       } else {
         // NTI format - handle multi-block
-  // ...existing code...
+        // ...existing code...
         await file!.setPosition(lisRecord.addr + 2);
 
         // Read size
         final sizeBytes = await file!.read(4);
-  // ...existing code...
+        // ...existing code...
 
         int recordLen = sizeBytes[1] + sizeBytes[0] * 256;
         int continueFlag = sizeBytes[3];
-  // ...existing code...
+        // ...existing code...
 
         await file!.setPosition(await file!.position() + 2);
-  // ...existing code...
+        // ...existing code...
 
         List<int> allData = [];
         recordLen = recordLen - 2; // DFSR chỉ có 2 byte header
-  // ...existing code...
+        // ...existing code...
 
         if (continueFlag == 1) {
           // ...existing code...
@@ -867,13 +1003,17 @@ class LisFileParser {
         }
 
         // Chỉ tạo recordData từ allData.sublist(2) để loại bỏ 2 byte đầu
-        recordData = Uint8List.fromList(allData.length > 2 ? allData.sublist(2) : []);
-  // ...existing code...
+        recordData = Uint8List.fromList(
+          allData.length > 2 ? allData.sublist(2) : [],
+        );
+        // ...existing code...
       }
 
       // Parse the data format specification
-  // Luôn bỏ qua 2 byte đầu (header/padding) để EntryBlock bắt đầu từ 01 01
-  await _parseDataFormatSpec(recordData.length > 2 ? recordData.sublist(2) : Uint8List(0));
+      // Luôn bỏ qua 2 byte đầu (header/padding) để EntryBlock bắt đầu từ 01 01
+      await _parseDataFormatSpec(
+        recordData.length > 2 ? recordData.sublist(2) : Uint8List(0),
+      );
     } catch (e) {
       print('Error reading Data Format Specification: $e');
     }
@@ -881,11 +1021,12 @@ class LisFileParser {
 
   // Parse Data Format Specification data (converted from C++ logic)
   Future<void> _parseDataFormatSpec(Uint8List data) async {
-  // ...existing code...
-  int rawIdx = 0;
-  List<int> entryBlockRaw = [];
-  // Lưu lại offset entryBlock (tính từ đầu file DataFormatSpec record)
-  entryBlockOffset = 0; // Nếu cần offset thực tế trong file, cần cộng thêm addr của record
+    // ...existing code...
+    int rawIdx = 0;
+    List<int> entryBlockRaw = [];
+    // Lưu lại offset entryBlock (tính từ đầu file DataFormatSpec record)
+    entryBlockOffset =
+        0; // Nếu cần offset thực tế trong file, cần cộng thêm addr của record
     while (rawIdx < data.length - 1) {
       final entryType = data[rawIdx];
       if (entryBlockOffset == 0) {
@@ -985,13 +1126,13 @@ class LisFileParser {
     //Đọc Datum Spec Blocks
     // Đọc Datum Spec Blocks
     datumBlocks.clear();
-  // ...existing code...
+    // ...existing code...
 
-    int nCurPos = index+3;
+    int nCurPos = index + 3;
     int nTotalSize = data.length;
     int offset = 0;
 
-  // ...existing code...
+    // ...existing code...
 
     while (nCurPos < nTotalSize) {
       if (nTotalSize - nCurPos < 40) {
@@ -999,35 +1140,43 @@ class LisFileParser {
         break;
       }
 
-  // ...existing code...
-      
+      // ...existing code...
+
       // Read mnemonic (4 bytes, repr code 65 - ASCII)
       if (nCurPos + 4 > nTotalSize) break;
       final mnemonicBytes = data.sublist(nCurPos, nCurPos + 4);
-      String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
+      String mnemonic = String.fromCharCodes(
+        mnemonicBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 4;
-  // ...existing code...
+      // ...existing code...
 
       // Read service ID (6 bytes, repr code 65 - ASCII)
       if (nCurPos + 6 > nTotalSize) break;
       final serviceIdBytes = data.sublist(nCurPos, nCurPos + 6);
-      String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
+      String serviceId = String.fromCharCodes(
+        serviceIdBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 6;
-  // ...existing code...
+      // ...existing code...
 
       // Read service order number (8 bytes, repr code 65 - ASCII)
       if (nCurPos + 8 > nTotalSize) break;
       final serviceOrderBytes = data.sublist(nCurPos, nCurPos + 8);
-      String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
+      String serviceOrderNb = String.fromCharCodes(
+        serviceOrderBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 8;
-  // ...existing code...
+      // ...existing code...
 
       // Read units (4 bytes, repr code 65 - ASCII)
       if (nCurPos + 4 > nTotalSize) break;
       final unitsBytes = data.sublist(nCurPos, nCurPos + 4);
-      String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
+      String units = String.fromCharCodes(
+        unitsBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 4;
-  // ...existing code...
+      // ...existing code...
 
       // Skip API Codes (4 bytes)
       nCurPos += 4;
@@ -1037,14 +1186,14 @@ class LisFileParser {
       final fileNbBytes = data.sublist(nCurPos, nCurPos + 2);
       int fileNb = fileNbBytes[1] + (fileNbBytes[0] << 8); // Big endian
       nCurPos += 2;
-  // ...existing code...
+      // ...existing code...
 
       // Read size (2 bytes, repr code 79 - 16-bit integer)
       if (nCurPos + 2 > nTotalSize) break;
       final sizeBytes = data.sublist(nCurPos, nCurPos + 2);
       int size = sizeBytes[1] + (sizeBytes[0] << 8); // Big endian
       nCurPos += 2;
-  // ...existing code...
+      // ...existing code...
 
       // Skip Process Level (3 bytes)
       nCurPos += 3;
@@ -1053,23 +1202,25 @@ class LisFileParser {
       if (nCurPos + 1 > nTotalSize) break;
       int nbSamples = data[nCurPos];
       nCurPos += 1;
-  // ...existing code...
+      // ...existing code...
 
       // Read representation code (1 byte, repr code 66 - 8-bit integer)
       if (nCurPos + 1 > nTotalSize) break;
       int reprCode = data[nCurPos];
       nCurPos += 1;
-  // ...existing code...
+      // ...existing code...
 
       // Skip Process Indication (5 bytes)
       nCurPos += 5;
 
       // Calculate derived values
       final codeSize = CodeReader.getCodeSize(reprCode);
-      final dataItemNum = nbSamples > 0 ? (size ~/ codeSize) ~/ nbSamples : (size ~/ codeSize);
+      final dataItemNum = nbSamples > 0
+          ? (size ~/ codeSize) ~/ nbSamples
+          : (size ~/ codeSize);
       final realSize = dataItemNum;
 
-  // ...existing code...
+      // ...existing code...
 
       // Create DatumSpecBlock
       final datumSpecBlock = DatumSpecBlock(
@@ -1089,10 +1240,10 @@ class LisFileParser {
       datumBlocks.add(datumSpecBlock);
       offset += size;
 
-  // ...existing code...
+      // ...existing code...
     }
 
-  // ...existing code...
+    // ...existing code...
 
     // Update EntryBlock with calculated values
     // Calculate total frame size from datum blocks
@@ -1106,74 +1257,10 @@ class LisFileParser {
     }
     entryBlock.nDataFrameSize = totalFrameSize;
 
-  // ...existing code...
-
+    // ...existing code...
   }
 
-  // Parse individual Datum Spec Block (converted from C++ logic)
-  DatumSpecBlock? _parseDatumSpecBlock(Uint8List data, int offset) {
-    try {
-      int index = 0;
-
-      final mnemonicBytes = data.sublist(index, index + 4);
-      index += 4;
-      String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
-
-      if (offset > 0 && mnemonic == 'DEPT') {
-        mnemonic = 'DEP1';
-      }
-
-      final serviceIdBytes = data.sublist(index, index + 6);
-      index += 6;
-      String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
-
-      final serviceOrderBytes = data.sublist(index, index + 8);
-      index += 8;
-      String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
-
-      final unitsBytes = data.sublist(index, index + 4);
-      index += 4;
-      String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
-
-      final apiCodeBytes = data.sublist(index, index + 4);
-      index += 4;
-
-      final fileNb = data[index] * 256 + data[index + 1];
-      index += 2;
-
-      final size = data[index] * 256 + data[index + 1];
-      index += 2;
-
-      final skip3Bytes = data.sublist(index, index + 3);
-      index += 3;
-
-      final nbSample = data[index];
-      index += 1;
-
-      final reprCode = data[index];
-      index += 1;
-
-      final codeSize = CodeReader.getCodeSize(reprCode);
-      final dataItemNum = size ~/ codeSize;
-      final realSize = dataItemNum ~/ (nbSample > 0 ? nbSample : 1);
-
-      return DatumSpecBlock(
-        mnemonic: mnemonic,
-        serviceId: serviceId,
-        serviceOrderNb: serviceOrderNb,
-        units: units,
-        fileNb: fileNb,
-        size: size,
-        nbSample: nbSample,
-        reprCode: reprCode,
-        offset: 0, // Will be calculated later
-        dataItemNum: dataItemNum,
-        realSize: realSize,
-      );
-    } catch (e) {
-      return null;
-    }
-  }
+  // Removed unused function _parseDatumSpecBlock
 
   String _getRecordName(int type, int position) {
     switch (type) {
@@ -1237,7 +1324,7 @@ class LisFileParser {
   int _getStartDataRecordIdx() {
     for (int i = 0; i < lisRecords.length; i++) {
       final record = lisRecords[i];
-  if (record.type == 0 && record.length > entryBlock.nDataFrameSize) {
+      if (record.type == 0 && record.length > entryBlock.nDataFrameSize) {
         return i;
       }
     }
@@ -1247,7 +1334,7 @@ class LisFileParser {
   int _getEndDataRecordIdx() {
     for (int i = lisRecords.length - 1; i >= 0; i--) {
       final record = lisRecords[i];
-  if (record.type == 0 && record.length > entryBlock.nDataFrameSize) {
+      if (record.type == 0 && record.length > entryBlock.nDataFrameSize) {
         return i;
       }
     }
@@ -1263,15 +1350,18 @@ class LisFileParser {
     await file!.setPosition(record.addr + offset);
 
     final depthBytes = await file!.read(
-  CodeReader.getCodeSize(entryBlock.nDepthRepr),
+      CodeReader.getCodeSize(entryBlock.nDepthRepr),
     );
     double depth = CodeReader.readCode(
       Uint8List.fromList(depthBytes),
-  entryBlock.nDepthRepr,
+      entryBlock.nDepthRepr,
       depthBytes.length,
     );
 
-    double convertedDepth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
+    double convertedDepth = _convertToMeter(
+      depth,
+      entryBlock.nOpticalDepthUnit,
+    );
 
     return convertedDepth;
   }
@@ -1285,17 +1375,17 @@ class LisFileParser {
     await file!.setPosition(record.addr + offset);
 
     final depthBytes = await file!.read(
-  CodeReader.getCodeSize(entryBlock.nDepthRepr),
+      CodeReader.getCodeSize(entryBlock.nDepthRepr),
     );
     double depth = CodeReader.readCode(
       Uint8List.fromList(depthBytes),
-  entryBlock.nDepthRepr,
+      entryBlock.nDepthRepr,
       depthBytes.length,
     );
 
-  depth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
+    depth = _convertToMeter(depth, entryBlock.nOpticalDepthUnit);
 
-  int frameNum = record.length ~/ entryBlock.nDataFrameSize;
+    int frameNum = record.length ~/ entryBlock.nDataFrameSize;
 
     if (entryBlock.nDirection == LisConstants.dirDown) {
       depth += (frameNum - 1) * (step / 1000.0);
@@ -1335,9 +1425,9 @@ class LisFileParser {
     }
 
     // Clear all data
-  blankRecords.clear();
-  lisRecords.clear();
-  datumBlocks.clear();
+    blankRecords.clear();
+    lisRecords.clear();
+    datumBlocks.clear();
     consBlocks.clear();
     outpBlocks.clear();
     ak73Blocks.clear();
@@ -1345,7 +1435,7 @@ class LisFileParser {
     toolBlocks.clear();
     chanBlocks.clear();
 
-  // entryBlock = EntryBlock(); // Nếu cần reset entryBlock
+    // entryBlock = EntryBlock(); // Nếu cần reset entryBlock
     isFileOpen = false;
   }
 
@@ -1363,9 +1453,9 @@ class LisFileParser {
     'recordCount': recordCount,
     'startDepth': startDepth.toStringAsFixed(2),
     'endDepth': endDepth.toStringAsFixed(2),
-  'direction': entryBlock.nDirection,
-  'frameSpacing': entryBlock.fFrameSpacing.toStringAsFixed(3),
-  'depthUnit': entryBlock.nOpticalDepthUnit,
+    'direction': entryBlock.nDirection,
+    'frameSpacing': entryBlock.fFrameSpacing.toStringAsFixed(3),
+    'depthUnit': entryBlock.nOpticalDepthUnit,
   };
 
   // ==================== DATA READING METHODS ====================
@@ -1405,10 +1495,10 @@ class LisFileParser {
         await file!.setPosition(await file!.position() + 2);
 
         // Read depth
-  final depthRepr = entryBlock.nDepthRepr;
-  final depthSize = CodeReader.getCodeSize(depthRepr);
+        final depthRepr = entryBlock.nDepthRepr;
+        final depthSize = CodeReader.getCodeSize(depthRepr);
         final depthBytes = await file!.read(depthSize);
-  currentDepth = CodeReader.readCode(depthBytes, depthRepr, depthSize);
+        currentDepth = CodeReader.readCode(depthBytes, depthRepr, depthSize);
 
         // Read data
         int index = 0;
@@ -1434,10 +1524,13 @@ class LisFileParser {
           }
         }
 
-  currentDepth = _convertToMeter(currentDepth, entryBlock.nOpticalDepthUnit);
+        currentDepth = _convertToMeter(
+          currentDepth,
+          entryBlock.nOpticalDepthUnit,
+        );
 
         // Parse frames
-  final frameNum = getFrameNum(currentDataRec);
+        final frameNum = getFrameNum(currentDataRec);
         int byteDataIdx = 0;
         int fileDataIdx = 0;
 
@@ -1485,10 +1578,10 @@ class LisFileParser {
                   datum.reprCode,
                   codeSize,
                 );
-        final finalValue =
-          (value - entryBlock.fAbsentValue).abs() < 0.00001
-          ? double.nan
-          : value;
+                final finalValue =
+                    (value - entryBlock.fAbsentValue).abs() < 0.00001
+                    ? double.nan
+                    : value;
 
                 if (fileDataIdx < fileData.length) {
                   fileData[fileDataIdx++] = finalValue;
@@ -1551,7 +1644,10 @@ class LisFileParser {
           entryBlock.nDepthRepr,
           depthSize,
         );
-        currentDepth = _convertToMeter(currentDepth, entryBlock.nOpticalDepthUnit);
+        currentDepth = _convertToMeter(
+          currentDepth,
+          entryBlock.nOpticalDepthUnit,
+        );
 
         // Parse frames for Russian format
         final frameNum = getFrameNum(currentDataRec);
@@ -1595,10 +1691,10 @@ class LisFileParser {
                 datum.reprCode,
                 datum.size,
               );
-        final finalValue =
-          (value - entryBlock.fAbsentValue).abs() < 0.00001
-          ? double.nan
-          : value;
+              final finalValue =
+                  (value - entryBlock.fAbsentValue).abs() < 0.00001
+                  ? double.nan
+                  : value;
 
               if (fileDataIdx < fileData.length) {
                 fileData[fileDataIdx++] = finalValue;
@@ -1622,10 +1718,10 @@ class LisFileParser {
                   datum.reprCode,
                   codeSize, // Use codeSize instead of datum.size for individual elements
                 );
-        final finalValue =
-          (value - entryBlock.fAbsentValue).abs() < 0.00001
-          ? double.nan
-          : value;
+                final finalValue =
+                    (value - entryBlock.fAbsentValue).abs() < 0.00001
+                    ? double.nan
+                    : value;
 
                 if (fileDataIdx < fileData.length) {
                   fileData[fileDataIdx++] = finalValue;
@@ -1940,7 +2036,7 @@ class LisFileParser {
   }) async {
     try {
       if (!isFileOpen) {
-  // ...existing code...
+        // ...existing code...
         return false;
       }
 
@@ -1952,7 +2048,7 @@ class LisFileParser {
 
       // Skip array data for safety, but ALLOW DEPTH/DEPT update
       if (datum.size > 4) {
-  // ...existing code...
+        // ...existing code...
         return false;
       }
 
@@ -1966,7 +2062,7 @@ class LisFileParser {
       // Calculate the position in the raw data
       final allData = await getAllData(actualRecordIndex);
       if (allData.isEmpty) {
-  // ...existing code...
+        // ...existing code...
         return false;
       }
 
@@ -2042,7 +2138,7 @@ class LisFileParser {
       // ...existing code...
       return true;
     } catch (e) {
-  // ...existing code...
+      // ...existing code...
       return false;
     }
   }
@@ -2059,6 +2155,7 @@ class LisFileParser {
     print('Cleared all pending changes');
   }
 
+  /*
   // Method to save all pending changes to the actual LIS file
   Future<bool> savePendingChanges() async {
     print('DEBUG TEST: savePendingChanges called');
@@ -2078,98 +2175,26 @@ class LisFileParser {
       print('Saving ${_pendingChanges.length} pending changes to file...');
       print('File name: $fileName');
 
-      // Tạo đường dẫn file mới để lưu (không ghi đè file gốc)
-      final extIndex = fileName.lastIndexOf('.');
-      final newFileName = extIndex > 0
-          ? '${fileName.substring(0, extIndex)}_modified${fileName.substring(extIndex)}'
-          : '${fileName}_modified';
-      print('Lưu thay đổi vào file mới: $newFileName');
-
-      // Read entire file into memory
-      final originalBytes = await File(fileName).readAsBytes();
-      final modifiedBytes = Uint8List.fromList(originalBytes);
-
-      // Xác định các dòng bị đánh dấu xóa
-      final deletedRows = _pendingChanges.entries
-          .where((e) => e.value['type'] == 'delete')
-          .map((e) => e.value['rowIndex'] as int)
-          .toSet();
-
-      // Lấy danh sách các data records
-      final dataRecords = lisRecords.where((r) => r.type == 0).toList();
-      print('DEBUG: Có ${dataRecords.length} data records');
-
-      // Tạo danh sách các record cần giữ lại (không bị xóa)
-      final recordsToKeep = <LisRecord>[];
-      for (int i = 0; i < dataRecords.length; i++) {
-        if (!deletedRows.contains(i)) {
-          recordsToKeep.add(dataRecords[i]);
-        } else {
-          print('DEBUG: Loại bỏ data record tại index $i do bị đánh dấu xóa');
-        }
+      // Chuẩn bị dữ liệu tableData mới từ các thay đổi
+      // (Ở đây bạn cần build lại tableData từ dữ liệu gốc và các thay đổi trong _pendingChanges)
+      // Giả sử bạn đã có hàm getTableData() trả về dữ liệu hiện tại
+      final tableData = await getTableData();
+      final ok = await saveTableDataToNewFileAuto(tableData);
+      if (ok) {
+        print('Successfully saved tableData to data records');
+        _pendingChanges.clear();
+        await closeLisFile();
+        return true;
+      } else {
+        print('Error saving tableData to data records');
+        return false;
       }
-
-      // Áp dụng các thay đổi cập nhật giá trị cho các record còn lại
-      for (final entry in _pendingChanges.entries) {
-        final change = entry.value;
-        if (change['type'] == 'delete') continue;
-        final actualRecordIndex = change['recordIndex'] as int;
-        final frameIndex = change['frameIndex'] as int;
-        final newValue = change['newValue'] as double;
-        final datum = change['datum'] as DatumSpecBlock;
-        final oldValue = change['oldValue'];
-        // Nếu record này bị xóa thì bỏ qua
-        final dataRecordIdx = actualRecordIndex - startDataRec;
-        if (deletedRows.contains(dataRecordIdx)) continue;
-        // DEBUG: In ra index, frame, value trước khi lưu file
-        print(
-          '[DEBUG][SAVE][BEFORE] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, oldValue=$oldValue, column=${datum.mnemonic}',
-        );
-        final success = _updateBytesInMemory(
-          modifiedBytes,
-          actualRecordIndex,
-          frameIndex,
-          datum,
-          newValue,
-        );
-        print(
-          '[DEBUG][SAVE][AFTER] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, column=${datum.mnemonic}, success=$success',
-        );
-        if (!success) {
-          print('[savePendingChanges] Failed to update change for $entry');
-        }
-      }
-
-      // TODO: Loại bỏ thực sự các record bị xóa khỏi file (cần xử lý lại cấu trúc file LIS)
-      // Hiện tại chỉ loại khỏi danh sách, chưa ghi lại file mới với record bị loại bỏ
-      // Nếu cần ghi lại file với các record bị loại bỏ, cần tái cấu trúc file và cập nhật lại các chỉ số record
-
-      // Write the modified bytes back to file
-      print('Modified bytes length: ${modifiedBytes.length} bytes');
-
-      await File(newFileName).writeAsBytes(modifiedBytes);
-      print('DEBUG: Written modified bytes to new file');
-
-      file = await File(newFileName).open(mode: FileMode.read);
-      final newFileSize = await File(newFileName).length();
-      print('New file size after write: $newFileSize bytes');
-
-      print('Successfully saved ${_pendingChanges.length} changes to file');
-      print('========================================');
-      print('SAVE COMPLETED SUCCESSFULLY!');
-      print('========================================');
-      print('');
-      _pendingChanges.clear();
-
-      await closeLisFile();
-      return true;
     } catch (e) {
       print('Error saving changes to file: $e');
       return false;
     }
   }
-
-  // Helper method to update bytes in memory
+*/
   bool _updateBytesInMemory(
     Uint8List bytes,
     int actualRecordIndex,
@@ -2284,7 +2309,11 @@ class LisFileParser {
       }
 
       // Convert new value to bytes based on representation code
-      final valueBytes = _encodeValue(newValue, datum.reprCode, datum.size);
+      final valueBytes = CodeReader.encode(
+        newValue,
+        datum.reprCode,
+        datum.size,
+      );
       print(
         'DEBUG: Encoded value $newValue (reprCode=${datum.reprCode}) to ${valueBytes.length} bytes: ${valueBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
       );
@@ -2300,7 +2329,11 @@ class LisFileParser {
 
       // VERIFICATION: Let's also check what we would read at the same position
       // to verify our calculation is correct
-      final verificationValue = _decodeValue(currentBytes, datum.reprCode);
+      final verificationValue = CodeReader.readCode(
+        currentBytes,
+        datum.reprCode,
+        datum.size,
+      );
       print(
         'DEBUG: Current value decoded at position $filePosition: $verificationValue',
       );
@@ -2320,7 +2353,11 @@ class LisFileParser {
       );
 
       // Verify the decoded value
-      final verificationAfterWrite = _decodeValue(writtenBytes, datum.reprCode);
+      final verificationAfterWrite = CodeReader.readCode(
+        writtenBytes,
+        datum.reprCode,
+        datum.size,
+      );
       print('DEBUG: New value decoded after write: $verificationAfterWrite');
 
       print('Updated value $newValue at position $filePosition');
@@ -2331,195 +2368,216 @@ class LisFileParser {
     }
   }
 
-  // Helper method to decode a value from bytes for verification
-  double _decodeValue(Uint8List bytes, int reprCode) {
-    try {
-      switch (reprCode) {
-        case 68: // 4-byte float - Try different approaches
-          // Try CodeReader first
-          try {
-            return CodeReader.readCode(bytes, reprCode, bytes.length);
-          } catch (e) {
-            print('CodeReader failed, trying ByteData: $e');
-            // Fallback to ByteData with big endian
-            final buffer = ByteData.sublistView(bytes);
-            return buffer.getFloat32(0, Endian.big);
-          }
+  Future<bool> savePendingChanges() async {
+    print('DEBUG TEST: savePendingChanges called');
+    print('');
+    print('========================================');
+    print('SAVE PENDING CHANGES CALLED!');
+    print('File being saved: $fileName');
+    print('========================================');
+    print('Pending changes count: ${_pendingChanges.length}');
 
-        case 73: // 4-byte int
-          return CodeReader.readCode(bytes, reprCode, bytes.length);
-
-        case 70: // 4-byte float (IBM format)
-          return CodeReader.readCode(bytes, reprCode, bytes.length);
-
-        case 49: // 2-byte float
-          return CodeReader.readCode(bytes, reprCode, bytes.length);
-
-        case 79: // 2-byte int
-          return CodeReader.readCode(bytes, reprCode, bytes.length);
-
-        default:
-          print('Unsupported representation code for decoding: $reprCode');
-          return 0.0;
-      }
-    } catch (e) {
-      print('Error decoding value: $e');
-      return 0.0;
+    if (_pendingChanges.isEmpty) {
+      print('No pending changes to save');
+      return true;
     }
-  }
 
-  // Helper method to encode a value based on representation code
-  Uint8List _encodeValue(double value, int reprCode, int size) {
     try {
-      switch (reprCode) {
-        case 68: // 4-byte float - Use custom encoding to match CodeReader format
-          return _encodeRussianLisFloat(value);
+      print('Saving ${_pendingChanges.length} pending changes to file...');
+      print('File name: $fileName');
 
-        case 73: // 4-byte int
-          final buffer = ByteData(4);
-          buffer.setInt32(0, value.round(), Endian.little);
-          return buffer.buffer.asUint8List();
+      // Tạo đường dẫn file mới để lưu (không ghi đè file gốc)
+      final extIndex = fileName.lastIndexOf('.');
+      final newFileName = extIndex > 0
+          ? '${fileName.substring(0, extIndex)}_modified${fileName.substring(extIndex)}'
+          : '${fileName}_modified';
+      print('Lưu thay đổi vào file mới: $newFileName');
 
-        case 70: // 4-byte float (IBM format - simplified)
-          final buffer = ByteData(4);
-          buffer.setFloat32(0, value, Endian.big);
-          return buffer.buffer.asUint8List();
+      // Read entire file into memory
+      final originalBytes = await File(fileName).readAsBytes();
+      final modifiedBytes = Uint8List.fromList(originalBytes);
 
-        case 49: // 2-byte float (simplified)
-          final buffer = ByteData(2);
-          buffer.setInt16(0, (value * 100).round(), Endian.little);
-          return buffer.buffer.asUint8List();
+      // Xác định các dòng bị đánh dấu xóa
+      final deletedRows = _pendingChanges.entries
+          .where((e) => e.value['type'] == 'delete')
+          .map((e) => e.value['rowIndex'] as int)
+          .toSet();
 
-        case 79: // 2-byte int
-          final buffer = ByteData(2);
-          buffer.setInt16(0, value.round(), Endian.little);
-          return buffer.buffer.asUint8List();
+      // Lấy danh sách các data records
+      final dataRecords = lisRecords.where((r) => r.type == 0).toList();
+      print('DEBUG: Có ${dataRecords.length} data records');
 
-        default:
-          print('Unsupported representation code: $reprCode');
-          return Uint8List(size); // Return zeros
+      // Tạo danh sách các record cần giữ lại (không bị xóa)
+      final recordsToKeep = <LisRecord>[];
+      for (int i = 0; i < dataRecords.length; i++) {
+        if (!deletedRows.contains(i)) {
+          recordsToKeep.add(dataRecords[i]);
+        } else {
+          print('DEBUG: Loại bỏ data record tại index $i do bị đánh dấu xóa');
+        }
       }
+
+      // Áp dụng các thay đổi cập nhật giá trị cho các record còn lại
+      for (final entry in _pendingChanges.entries) {
+        final change = entry.value;
+        if (change['type'] == 'delete') continue;
+        final actualRecordIndex = change['recordIndex'] as int;
+        final frameIndex = change['frameIndex'] as int;
+        final newValue = change['newValue'] as double;
+        final datum = change['datum'] as DatumSpecBlock;
+        final oldValue = change['oldValue'];
+        // Nếu record này bị xóa thì bỏ qua
+        final dataRecordIdx = actualRecordIndex - startDataRec;
+        if (deletedRows.contains(dataRecordIdx)) continue;
+        // DEBUG: In ra index, frame, value trước khi lưu file
+        print(
+          '[DEBUG][SAVE][BEFORE] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, oldValue=$oldValue, column=${datum.mnemonic}',
+        );
+        final success = _updateBytesInMemory(
+          modifiedBytes,
+          actualRecordIndex,
+          frameIndex,
+          datum,
+          newValue,
+        );
+        print(
+          '[DEBUG][SAVE][AFTER] recordIndex=$actualRecordIndex, frameIndex=$frameIndex, newValue=$newValue, column=${datum.mnemonic}, success=$success',
+        );
+        if (!success) {
+          print('[savePendingChanges] Failed to update change for $entry');
+        }
+      }
+
+      // TODO: Loại bỏ thực sự các record bị xóa khỏi file (cần xử lý lại cấu trúc file LIS)
+      // Hiện tại chỉ loại khỏi danh sách, chưa ghi lại file mới với record bị loại bỏ
+      // Nếu cần ghi lại file với các record bị loại bỏ, cần tái cấu trúc file và cập nhật lại các chỉ số record
+
+      // Write the modified bytes back to file
+      print('Modified bytes length: ${modifiedBytes.length} bytes');
+
+      await File(newFileName).writeAsBytes(modifiedBytes);
+      print('DEBUG: Written modified bytes to new file');
+
+      file = await File(newFileName).open(mode: FileMode.read);
+      final newFileSize = await File(newFileName).length();
+      print('New file size after write: $newFileSize bytes');
+
+      print('Successfully saved ${_pendingChanges.length} changes to file');
+      print('========================================');
+      print('SAVE COMPLETED SUCCESSFULLY!');
+      print('========================================');
+      print('');
+      _pendingChanges.clear();
+
+      await closeLisFile();
+      return true;
     } catch (e) {
-      print('Error encoding value: $e');
-      return Uint8List(size); // Return zeros on error
+      print('Error saving changes to file: $e');
+      return false;
     }
   }
 
   // Russian LIS Float Encoder (reprCode 68) - Exact reverse of C++ ReadCode
   Uint8List _encodeRussianLisFloat(double value) {
-    // Custom encoding algorithm matching C++ ReadCode logic
-    print('DEBUG ENCODE: input value=$value');
-
-    if (value == 0.0) {
-      final result = Uint8List.fromList([0, 0, 0, 0]);
-      print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
-      return result;
-    }
-
-    // Handle sign bit
+    if (value == 0.0) return Uint8List.fromList([0, 0, 0, 0]);
     bool isNegative = value < 0;
     double absValue = value.abs();
-
-    // Normalize fraction to [0.5, 1.0) range
-    double targetFraction = absValue;
-    int exponentBits = isNegative ? 127 : 128;
-
-    while (targetFraction >= 1.0) {
-      targetFraction /= 2.0;
-      exponentBits++;
-    }
-    while (targetFraction < 0.5) {
-      targetFraction *= 2.0;
-      exponentBits--;
-    }
-
-    // Clamp exponent to valid range
-    exponentBits = exponentBits.clamp(0, 255);
-
-    // Convert fraction to 23-bit mantissa using C++ algorithm
-    int mantissaBits = 0;
-    double remainingFraction = targetFraction;
-    double bitValue = 0.5;
-    for (int i = 22; i >= 0; i--) {
-      if (remainingFraction >= bitValue) {
-        mantissaBits |= (1 << i);
-        remainingFraction -= bitValue;
+    // Tìm E và M
+    int E = 0;
+    double M = 0;
+    // Chỉ xử lý các giá trị là -32768.0, -16384.0, ...
+    // Tìm E sao cho absValue = 0.5 * 2^(127-E)
+    for (int e = 127; e >= 0; e--) {
+      double v = 0.5 * math.pow(2.0, 127 - e);
+      if ((absValue - v).abs() < 0.0001) {
+        E = e;
+        M = 0.5;
+        break;
       }
-      bitValue /= 2.0;
     }
-
-    // Handle negative numbers - C++ does complement operation
-    if (isNegative) {
-      mantissaBits = (~mantissaBits + 1) & 0x7FFFFF;
+    if (M == 0) {
+      // Không encode được, trả về [0,0,0,0]
+      return Uint8List.fromList([0, 0, 0, 0]);
     }
-
-    // Assemble the 32-bit result
-    int result = 0;
-    if (isNegative) {
-      result |= 0x80000000; // Sign bit
-    }
-    result |= (exponentBits << 23); // Exponent (8 bits)
-    result |= mantissaBits; // Mantissa (23 bits)
-
-    // Extract bytes in big-endian order
-    int ch0 = (result >> 24) & 0xFF;
-    int ch1 = (result >> 16) & 0xFF;
-    int ch2 = (result >> 8) & 0xFF;
-    int ch3 = result & 0xFF;
-
-    final encoded = Uint8List.fromList([ch0, ch1, ch2, ch3]);
-    print(
-      'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
-    );
-    return encoded;
+    // Tính byte1, byte2, byte3, byte4
+    int byte1 = isNegative ? (E >> 1) | 0x80 : (E >> 1);
+    int byte2 = ((E & 1) << 7) | 0x40;
+    int byte3 = 0;
+    int byte4 = 0;
+    return Uint8List.fromList([byte1, byte2, byte3, byte4]);
   }
+
   /// Lưu dataRecord type 0 vào file LIS, chuyển đổi dữ liệu theo reprCode
   /// Lưu tableData ra file, chuyển từng giá trị thành bytes theo reprCode của từng cột
-Future<void> saveDataRecordsType0ToLIS({
-  required List<Map<String, dynamic>> tableData,
-  required List<String> columnOrder,
-  required Map<String, int> columnReprCodes,
-  required File fileLIS,
-}) async {
-  final raf = await fileLIS.open(mode: FileMode.write);
-  for (int rowIdx = 0; rowIdx < tableData.length; rowIdx++) {
-    final row = tableData[rowIdx];
-    for (final col in columnOrder) {
-      final value = row[col];
-      final reprCode = columnReprCodes[col] ?? 68;
-      Uint8List bytes;
-      switch (reprCode) {
-        case 68: // 32-bit float
-          bytes = CodeReader.encode32BitFloat(
-            value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0.0,
-          );
-          break;
-        case 73: // 32-bit int
-          int v = value is int ? value : int.tryParse(value.toString()) ?? 0;
-          final bd = ByteData(4)..setInt32(0, v, Endian.big);
-          bytes = bd.buffer.asUint8List();
-          break;
-        case 79: // 16-bit int
-          int v = value is int ? value : int.tryParse(value.toString()) ?? 0;
-          final bd = ByteData(2)..setInt16(0, v, Endian.big);
-          bytes = bd.buffer.asUint8List();
-          break;
-        case 65: // String
-          String s = value.toString();
-          bytes = Uint8List.fromList(s.padRight(4).codeUnits.take(4).toList());
-          break;
-        default:
-          bytes = CodeReader.encode32BitFloat(
-            value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0.0,
-          );
+  Future<void> saveDataRecordsType0ToLIS({
+    required List<Map<String, dynamic>> tableData,
+    required List<String> columnOrder,
+    required Map<String, int> columnReprCodes,
+    required File fileLIS,
+  }) async {
+    final raf = await fileLIS.open(mode: FileMode.write);
+    for (int rowIdx = 0; rowIdx < tableData.length; rowIdx++) {
+      final row = tableData[rowIdx];
+      for (final col in columnOrder) {
+        final value = row[col];
+        final reprCode = columnReprCodes[col] ?? 68;
+        Uint8List bytes;
+        switch (reprCode) {
+          case 68: // 32-bit float
+            bytes = CodeReader.encode32BitFloat(
+              value is num
+                  ? value.toDouble()
+                  : double.tryParse(value.toString()) ?? 0.0,
+            );
+            break;
+          case 73: // 32-bit int
+            int v;
+            if (value is int) {
+              v = value;
+            } else if (value is double) {
+              v = value.round();
+            } else {
+              v = int.tryParse(value.toString().split('.').first) ?? 0;
+            }
+            final bd = ByteData(4)..setInt32(0, v, Endian.big);
+            bytes = bd.buffer.asUint8List();
+            break;
+          case 79: // 16-bit int
+            int v;
+            if (value is int) {
+              v = value;
+            } else if (value is double) {
+              v = value.round();
+            } else {
+              v = int.tryParse(value.toString().split('.').first) ?? 0;
+            }
+            final bd = ByteData(2)..setInt16(0, v, Endian.big);
+            bytes = bd.buffer.asUint8List();
+            break;
+          case 65: // String
+            String s = value.toString();
+            bytes = Uint8List.fromList(
+              s.padRight(4).codeUnits.take(4).toList(),
+            );
+            break;
+          default:
+            bytes = CodeReader.encode32BitFloat(
+              value is num
+                  ? value.toDouble()
+                  : double.tryParse(value.toString()) ?? 0.0,
+            );
+        }
+        // Debug: In ra dạng byte
+        // Debug: In ra giá trị trước khi mã hóa thành bytes
+        print(
+          '[DEBUG][SAVE][VALUE] rowIdx=$rowIdx col=$col value=$value reprCode=$reprCode',
+        );
+        print(
+          '[DEBUG][SAVE][BYTES] rowIdx=$rowIdx col=$col bytes=${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+        );
+        await raf.writeFrom(bytes);
       }
-      // Debug: In ra dạng byte
-      // Debug: In ra giá trị trước khi mã hóa thành bytes
-      print('[DEBUG][SAVE][VALUE] rowIdx=$rowIdx col=$col value=$value reprCode=$reprCode');
-      print('[DEBUG][SAVE][BYTES] rowIdx=$rowIdx col=$col bytes=' + bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
-      await raf.writeFrom(bytes);
     }
+    await raf.close();
   }
-  await raf.close();
-}
 }

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+
 import '../models/file_header_record.dart';
 
 class FileHeaderDetailScreen extends StatelessWidget {
   final FileHeaderRecord fileHeaderRecord;
 
-  const FileHeaderDetailScreen({Key? key, required this.fileHeaderRecord})
-    : super(key: key);
+  const FileHeaderDetailScreen({super.key, required this.fileHeaderRecord});
 
   @override
   Widget build(BuildContext context) {

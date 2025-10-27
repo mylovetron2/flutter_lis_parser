@@ -1,16 +1,17 @@
-import '../models/entry_block.dart';
 // LIS File Parser - converted from CLisFile C++ class
 
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:math';
-import '../models/lis_record.dart';
-import '../models/blank_record.dart';
-import '../models/datum_spec_block.dart';
-import '../models/well_info_block.dart';
-import '../models/data_format_spec.dart';
+import 'dart:typed_data';
+
 import '../constants/lis_constants.dart';
+import '../models/blank_record.dart';
+import '../models/data_format_spec.dart';
+import '../models/datum_spec_block.dart';
+import '../models/entry_block.dart';
 import '../models/file_header_record.dart';
+import '../models/lis_record.dart';
+import '../models/well_info_block.dart';
 import 'code_reader.dart';
 
 class LisFileParser {
@@ -19,7 +20,9 @@ class LisFileParser {
     try {
       final entryBlockBytes = encodeEntryBlock(entryBlock);
       print('DEBUG: entryBlockBytes length: ${entryBlockBytes.length}');
-      print('DEBUG: entryBlockBytes hex trước lưu: ${entryBlockBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+      print(
+        'DEBUG: entryBlockBytes hex trước lưu: ${entryBlockBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       // Đọc toàn bộ file gốc vào buffer
       final originalFile = File(fileName);
       final originalBytes = await originalFile.readAsBytes();
@@ -29,7 +32,6 @@ class LisFileParser {
       print('  lisRecords[dataFSRIdx].addr = ${lisRecords[dataFSRIdx].addr}');
       print('  entryBlockOffset = $entryBlockOffset');
       print('  calculated fileOffset = $fileOffset');
-
 
       fileOffset = lisRecords[dataFSRIdx].addr + 2;
       // Ghi ra file mới
@@ -46,6 +48,7 @@ class LisFileParser {
       return false;
     }
   }
+
   /// Ghi đè EntryBlock đã mã hóa vào file LIS
   Future<bool> saveEntryBlock() async {
     if (file == null) return false;
@@ -57,6 +60,7 @@ class LisFileParser {
     await file!.flush();
     return true;
   }
+
   /// Mã hóa EntryBlock thành Uint8List để ghi lại vào file LIS
   Uint8List encodeEntryBlock(EntryBlock entryBlock) {
     final bytes = <int>[];
@@ -74,12 +78,12 @@ class LisFileParser {
     bytes.add(66);
     bytes.add(entryBlock.nDatumSpecBlockType & 0xFF);
 
-  // Trường 3: nDataFrameSize (2 byte, reprCode 79, big endian)
-  bytes.add(3);
-  bytes.add(2);
-  bytes.add(79); // 2 byte int
-  bytes.add((entryBlock.nDataFrameSize >> 8) & 0xFF); // byte cao
-  bytes.add(entryBlock.nDataFrameSize & 0xFF);        // byte thấp
+    // Trường 3: nDataFrameSize (2 byte, reprCode 79, big endian)
+    bytes.add(3);
+    bytes.add(2);
+    bytes.add(79); // 2 byte int
+    bytes.add((entryBlock.nDataFrameSize >> 8) & 0xFF); // byte cao
+    bytes.add(entryBlock.nDataFrameSize & 0xFF); // byte thấp
 
     // Trường 4: nDirection
     bytes.add(4);
@@ -97,7 +101,8 @@ class LisFileParser {
     bytes.add(6);
     bytes.add(4);
     bytes.add(68);
-    final refPointBytes = ByteData(4)..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
+    final refPointBytes = ByteData(4)
+      ..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
     bytes.addAll(refPointBytes.buffer.asUint8List());
 
     // Trường 7: strDataRefPointUnit (4 byte ASCII, reprCode 65)
@@ -118,7 +123,9 @@ class LisFileParser {
     bytes.add(9);
     bytes.add(4);
     bytes.add(65);
-    final spacingUnitBytes = entryBlock.strFrameSpacingUnit.padRight(4).codeUnits;
+    final spacingUnitBytes = entryBlock.strFrameSpacingUnit
+        .padRight(4)
+        .codeUnits;
     bytes.addAll(spacingUnitBytes.take(4));
 
     // Trường 11: nMaxFramesPerRecord (1 byte int, reprCode 66)
@@ -832,7 +839,9 @@ class LisFileParser {
 
         // Read size
         final sizeBytes = await file!.read(4);
-        print('Size bytes: ${sizeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+        print(
+          'Size bytes: ${sizeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+        );
 
         int recordLen = sizeBytes[1] + sizeBytes[0] * 256;
         int continueFlag = sizeBytes[3];
@@ -872,13 +881,17 @@ class LisFileParser {
         }
 
         // Chỉ tạo recordData từ allData.sublist(2) để loại bỏ 2 byte đầu
-        recordData = Uint8List.fromList(allData.length > 2 ? allData.sublist(2) : []);
+        recordData = Uint8List.fromList(
+          allData.length > 2 ? allData.sublist(2) : [],
+        );
         print('Total record data: ${recordData.length} bytes');
       }
 
       // Parse the data format specification
-  // Luôn bỏ qua 2 byte đầu (header/padding) để EntryBlock bắt đầu từ 01 01
-  await _parseDataFormatSpec(recordData.length > 2 ? recordData.sublist(2) : Uint8List(0));
+      // Luôn bỏ qua 2 byte đầu (header/padding) để EntryBlock bắt đầu từ 01 01
+      await _parseDataFormatSpec(
+        recordData.length > 2 ? recordData.sublist(2) : Uint8List(0),
+      );
     } catch (e) {
       print('Error reading Data Format Specification: $e');
     }
@@ -888,10 +901,11 @@ class LisFileParser {
   Future<void> _parseDataFormatSpec(Uint8List data) async {
     print('_parseDataFormatSpec called with ${data.length} bytes');
     // Debug: In ra giá trị raw của EntryBlock (từ đầu đến khi gặp entryType == 0)
-  int rawIdx = 0;
-  List<int> entryBlockRaw = [];
-  // Lưu lại offset entryBlock (tính từ đầu file DataFormatSpec record)
-  entryBlockOffset = 0; // Nếu cần offset thực tế trong file, cần cộng thêm addr của record
+    int rawIdx = 0;
+    List<int> entryBlockRaw = [];
+    // Lưu lại offset entryBlock (tính từ đầu file DataFormatSpec record)
+    entryBlockOffset =
+        0; // Nếu cần offset thực tế trong file, cần cộng thêm addr của record
     while (rawIdx < data.length - 1) {
       final entryType = data[rawIdx];
       if (entryBlockOffset == 0) {
@@ -1003,7 +1017,7 @@ class LisFileParser {
     datumBlocks.clear();
     print('Starting to read Datum Spec Blocks from index $index');
 
-    int nCurPos = index+3;
+    int nCurPos = index + 3;
     int nTotalSize = data.length;
     int offset = 0;
 
@@ -1016,32 +1030,40 @@ class LisFileParser {
       }
 
       print('Reading DatumSpecBlock at position $nCurPos');
-      
+
       // Read mnemonic (4 bytes, repr code 65 - ASCII)
       if (nCurPos + 4 > nTotalSize) break;
       final mnemonicBytes = data.sublist(nCurPos, nCurPos + 4);
-      String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
+      String mnemonic = String.fromCharCodes(
+        mnemonicBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 4;
       print('Mnemonic: "$mnemonic"');
 
       // Read service ID (6 bytes, repr code 65 - ASCII)
       if (nCurPos + 6 > nTotalSize) break;
       final serviceIdBytes = data.sublist(nCurPos, nCurPos + 6);
-      String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
+      String serviceId = String.fromCharCodes(
+        serviceIdBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 6;
       print('ServiceID: "$serviceId"');
 
       // Read service order number (8 bytes, repr code 65 - ASCII)
       if (nCurPos + 8 > nTotalSize) break;
       final serviceOrderBytes = data.sublist(nCurPos, nCurPos + 8);
-      String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
+      String serviceOrderNb = String.fromCharCodes(
+        serviceOrderBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 8;
       print('ServiceOrderNb: "$serviceOrderNb"');
 
       // Read units (4 bytes, repr code 65 - ASCII)
       if (nCurPos + 4 > nTotalSize) break;
       final unitsBytes = data.sublist(nCurPos, nCurPos + 4);
-      String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
+      String units = String.fromCharCodes(
+        unitsBytes,
+      ).trim().replaceAll('\x00', '');
       nCurPos += 4;
       print('Units: "$units"');
 
@@ -1082,10 +1104,14 @@ class LisFileParser {
 
       // Calculate derived values
       final codeSize = CodeReader.getCodeSize(reprCode);
-      final dataItemNum = nbSamples > 0 ? (size ~/ codeSize) ~/ nbSamples : (size ~/ codeSize);
+      final dataItemNum = nbSamples > 0
+          ? (size ~/ codeSize) ~/ nbSamples
+          : (size ~/ codeSize);
       final realSize = dataItemNum;
 
-      print('CodeSize: $codeSize, DataItemNum: $dataItemNum, RealSize: $realSize');
+      print(
+        'CodeSize: $codeSize, DataItemNum: $dataItemNum, RealSize: $realSize',
+      );
 
       // Create DatumSpecBlock
       final datumSpecBlock = DatumSpecBlock(
@@ -1105,7 +1131,9 @@ class LisFileParser {
       datumBlocks.add(datumSpecBlock);
       offset += size;
 
-      print('Added DatumSpecBlock: ${datumSpecBlock.mnemonic}, offset updated to $offset');
+      print(
+        'Added DatumSpecBlock: ${datumSpecBlock.mnemonic}, offset updated to $offset',
+      );
     }
 
     print('Finished reading ${datumBlocks.length} Datum Spec Blocks');
@@ -1129,20 +1157,27 @@ class LisFileParser {
     }
     dataFormatSpec.dataFrameSize = totalFrameSize;
 
-    print('DataFormatSpec updated: frameSize=$totalFrameSize, depthRepr=${dataFormatSpec.depthRepr}');
-
+    print(
+      'DataFormatSpec updated: frameSize=$totalFrameSize, depthRepr=${dataFormatSpec.depthRepr}',
+    );
   }
 
   // Parse individual Datum Spec Block (converted from C++ logic)
   DatumSpecBlock? _parseDatumSpecBlock(Uint8List data, int offset) {
     try {
-      print('DatumSpecBlock raw bytes: ' + data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'DatumSpecBlock raw bytes: ${data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       int index = 0;
 
       final mnemonicBytes = data.sublist(index, index + 4);
-      print('mnemonicBytes: ' + mnemonicBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'mnemonicBytes: ${mnemonicBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 4;
-      String mnemonic = String.fromCharCodes(mnemonicBytes).trim().replaceAll('\x00', '');
+      String mnemonic = String.fromCharCodes(
+        mnemonicBytes,
+      ).trim().replaceAll('\x00', '');
       print('mnemonic: $mnemonic');
 
       if (offset > 0 && mnemonic == 'DEPT') {
@@ -1150,48 +1185,72 @@ class LisFileParser {
       }
 
       final serviceIdBytes = data.sublist(index, index + 6);
-      print('serviceIdBytes: ' + serviceIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'serviceIdBytes: ${serviceIdBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 6;
-      String serviceId = String.fromCharCodes(serviceIdBytes).trim().replaceAll('\x00', '');
+      String serviceId = String.fromCharCodes(
+        serviceIdBytes,
+      ).trim().replaceAll('\x00', '');
       print('serviceId: $serviceId');
 
       final serviceOrderBytes = data.sublist(index, index + 8);
-      print('serviceOrderBytes: ' + serviceOrderBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'serviceOrderBytes: ${serviceOrderBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 8;
-      String serviceOrderNb = String.fromCharCodes(serviceOrderBytes).trim().replaceAll('\x00', '');
+      String serviceOrderNb = String.fromCharCodes(
+        serviceOrderBytes,
+      ).trim().replaceAll('\x00', '');
       print('serviceOrderNb: $serviceOrderNb');
 
       final unitsBytes = data.sublist(index, index + 4);
-      print('unitsBytes: ' + unitsBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'unitsBytes: ${unitsBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 4;
-      String units = String.fromCharCodes(unitsBytes).trim().replaceAll('\x00', '');
+      String units = String.fromCharCodes(
+        unitsBytes,
+      ).trim().replaceAll('\x00', '');
       print('units: $units');
 
       final apiCodeBytes = data.sublist(index, index + 4);
-      print('apiCodeBytes (skip): ' + apiCodeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'apiCodeBytes (skip): ${apiCodeBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 4;
 
       final fileNb = data[index] * 256 + data[index + 1];
-      print('fileNbBytes: ' + data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'fileNbBytes: ${data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 2;
       print('fileNb: $fileNb');
 
       final size = data[index] * 256 + data[index + 1];
-      print('sizeBytes: ' + data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'sizeBytes: ${data.sublist(index, index + 2).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 2;
       print('size: $size');
 
       final skip3Bytes = data.sublist(index, index + 3);
-      print('skip3Bytes: ' + skip3Bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'skip3Bytes: ${skip3Bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 3;
 
       final nbSample = data[index];
-      print('nbSampleByte: ' + data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'nbSampleByte: ${data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 1;
       print('nbSample: $nbSample');
 
       final reprCode = data[index];
-      print('reprCodeByte: ' + data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '));
+      print(
+        'reprCodeByte: ${data.sublist(index, index + 1).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
       index += 1;
       print('reprCode: $reprCode');
 
@@ -1199,7 +1258,9 @@ class LisFileParser {
       final dataItemNum = size ~/ codeSize;
       final realSize = dataItemNum ~/ (nbSample > 0 ? nbSample : 1);
 
-      print('codeSize: $codeSize, dataItemNum: $dataItemNum, realSize: $realSize');
+      print(
+        'codeSize: $codeSize, dataItemNum: $dataItemNum, realSize: $realSize',
+      );
 
       return DatumSpecBlock(
         mnemonic: mnemonic,

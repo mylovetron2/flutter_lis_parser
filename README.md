@@ -75,6 +75,28 @@ flutter run
 
 ## Technical Notes
 
+### Lưu ý về chuyển đổi giá trị int32 (reprCode=73)
+
+Khi lưu dữ liệu cột DEPTH hoặc các trường có reprCode=73 (int32), nếu giá trị đầu vào là kiểu số thực (double, ví dụ 86360000.000), cần ép kiểu về số nguyên trước khi mã hóa thành byte. Nếu không, giá trị sẽ bị chuyển thành 0 do lỗi ép kiểu.
+
+Đã sửa code để tự động nhận diện kiểu double và chuyển về int bằng `.round()`, đảm bảo giá trị như 86360000.000 sẽ được mã hóa đúng thành byte big-endian (`05 24 B3 A0`).
+
+**Ví dụ:**
+```dart
+int v;
+if (value is int) {
+  v = value;
+} else if (value is double) {
+  v = value.round();
+} else {
+  v = int.tryParse(value.toString().split('.').first) ?? 0;
+}
+final bd = ByteData(4)..setInt32(0, v, Endian.big);
+bytes = bd.buffer.asUint8List();
+```
+
+Nhờ đó, dữ liệu DEPTH sẽ luôn được lưu đúng chuẩn int32 big-endian khi đầu vào là số thực.
+
 ### File Format Detection
 The application automatically detects whether a file is in Russian LIS or Halliburton NTI format by analyzing the blank record table structure.
 

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+
 import '../models/lis_record.dart';
 
 class RecordDetailScreenSimple extends StatelessWidget {
   final LisRecord record;
 
-  const RecordDetailScreenSimple({Key? key, required this.record})
-    : super(key: key);
+  const RecordDetailScreenSimple({super.key, required this.record});
 
   @override
   Widget build(BuildContext context) {

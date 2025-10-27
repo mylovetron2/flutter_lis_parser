@@ -1,9 +1,11 @@
-import 'package:flutter/material.dart';
-import 'data_format_spec_screen.dart';
-import 'entry_block_screen.dart' show EntryBlockScreen;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+
 import '../services/lis_file_parser.dart';
+import 'all_data_viewer_screen.dart';
+import 'entry_block_screen.dart' show EntryBlockScreen;
 import 'lis_viewer_screen.dart';
+//import 'all_data_viewer_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -42,7 +44,6 @@ class _HomeScreenState extends State<HomeScreen> {
             });
           },
         );
-
         if (mounted) {
           Navigator.push(
             context,
@@ -122,24 +123,42 @@ class _HomeScreenState extends State<HomeScreen> {
                     textStyle: const TextStyle(fontSize: 18),
                   ),
                 ),
-               const SizedBox(height: 16),
-               ElevatedButton(
-                 onPressed: () {
-                   // Điều hướng sang màn hình EntryBlockScreen
-                   Navigator.of(context).push(
-                     MaterialPageRoute(
-                       builder: (context) => EntryBlockScreen(entryBlock: _parser.entryBlock, parser: _parser),
-                     ),
-                   );
-                 },
-                 child: const Text('Xem EntryBlock'),
-               ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    // Điều hướng sang màn hình EntryBlockScreen
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => EntryBlockScreen(
+                          entryBlock: _parser.entryBlock,
+                          parser: _parser,
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Xem EntryBlock'),
+                ),
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () {
                     Navigator.pushNamed(context, '/value-converter');
                   },
                   child: const Text('Value Converter'),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: () {
+                    // Điều hướng sang màn hình AllDataViewerScreen
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => AllDataViewerScreen(
+                          parser: _parser,
+                          currentDataRec: _parser.currentDataRec,
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Xem dữ liệu thô (getAllData)'),
                 ),
               ],
               if (_errorMessage != null) ...[

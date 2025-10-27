@@ -55,6 +55,6 @@ class WellInfoBlock {
 
   @override
   String toString() {
-    return 'WellInfoBlock(mnemonic: $mnemonic, value: ${valueAsString}, unit: $unit)';
+    return 'WellInfoBlock(mnemonic: $mnemonic, value: $valueAsString, unit: $unit)';
   }
 }

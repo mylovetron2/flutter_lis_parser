@@ -92,8 +92,9 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       }
       final timeIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'TIME');
       int depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPTH');
-      if (depthIdx == -1)
+      if (depthIdx == -1) {
         depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPT');
+      }
       if (timeIdx == -1 || depthIdx == -1) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -104,7 +105,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
         return;
       }
       // Map TIME->DEPTH từ TXT (chuyển TIME sang giây)
-      double _parseTimeToSeconds(String timeStr) {
+      double parseTimeToSeconds(String timeStr) {
         // Hỗ trợ các định dạng: d:hh:mm:ss:ms, d:hh:mm:ss, hh:mm:ss, mm:ss, ss
         final parts = timeStr.split(':').map((e) => e.trim()).toList();
         double seconds = 0;
@@ -140,7 +141,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       for (var i = headerIdx + 1; i < lines.length; ++i) {
         final row = lines[i].split(RegExp(r'\s+|,|;|\t'));
         if (row.length > depthIdx && row.length > timeIdx) {
-          final timeSec = _parseTimeToSeconds(row[timeIdx]);
+          final timeSec = parseTimeToSeconds(row[timeIdx]);
           timeToDepth[timeSec.toString()] = row[depthIdx];
         }
       }
@@ -388,98 +389,24 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   }
 
   Future<void> _saveAllChangesToFile() async {
-    if (widget.parser.pendingChangesCount == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No changes to save'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    // Show confirmation dialog
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Save Changes to File'),
-        content: Text(
-          'This will permanently save ${widget.parser.pendingChangesCount} changes to the LIS file.\n\n'
-          'A backup copy will be created automatically.\n\n'
-          'Continue?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.green),
-            child: const Text('Save to File'),
-          ),
-        ],
+    // Sau khi nhấn nút Save, tạo file txt để test hàm saveDataRecordsType0ToLIS
+    final testFilePath = 'test_save_output.txt';
+    final fileLIS = File(testFilePath);
+    await widget.parser.saveDataRecordsType0ToLIS(
+      tableData: tableData,
+      columnOrder: columnNames,
+      columnReprCodes: widget.parser.getColumnReprCodes(columnNames),
+      fileLIS: fileLIS,
+    );
+    print('[DEBUG] Preparing to show SnackBar after save');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Đã lưu dữ liệu test vào $testFilePath!'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 3),
       ),
     );
-
-    if (confirmed != true) return;
-
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Saving changes to file...'),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      // Save initiated
-
-      final success = await widget.parser.savePendingChanges();
-      // Save result: $success
-
-      Navigator.of(context).pop(); // Close loading dialog
-
-      if (success) {
-        setState(() {
-          modifiedValues.clear(); // Clear UI modified state
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Successfully saved all changes to file!'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to save changes to file'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      Navigator.of(context).pop(); // Close loading dialog
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error saving to file: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    print('[DEBUG] SnackBar should be visible now');
   }
 
   void _cancelEdit() {
@@ -816,7 +743,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
                       } else if (isEditing) {
                         cells.add(
                           DataCell(
-                            Container(
+                            SizedBox(
                               width: 120,
                               child: TextField(
                                 controller: editControllers[cellKey],

@@ -3,7 +3,7 @@ import '../models/entry_block.dart';
 
 class DataFormatSpecEntryBlockScreen extends StatelessWidget {
   final EntryBlock entryBlock;
-  const DataFormatSpecEntryBlockScreen({Key? key, required this.entryBlock}) : super(key: key);
+  const DataFormatSpecEntryBlockScreen({super.key, required this.entryBlock});
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +30,7 @@ class DataFormatSpecEntryBlockScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           DataTable(
-            headingRowColor: MaterialStateProperty.all(Colors.grey[200]),
+            headingRowColor: WidgetStateProperty.all(Colors.grey[200]),
             columns: const [
               DataColumn(label: Text('Trường', style: TextStyle(fontWeight: FontWeight.bold))),
               DataColumn(label: Text('Giá trị', style: TextStyle(fontWeight: FontWeight.bold))),

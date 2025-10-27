@@ -5,7 +5,7 @@ import '../services/lis_file_parser.dart';
 class EntryBlockScreen extends StatefulWidget {
   final EntryBlock entryBlock;
   final LisFileParser parser;
-  const EntryBlockScreen({Key? key, required this.entryBlock, required this.parser}) : super(key: key);
+  const EntryBlockScreen({super.key, required this.entryBlock, required this.parser});
 
   @override
   State<EntryBlockScreen> createState() => _EntryBlockScreenState();
@@ -62,8 +62,8 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
                     final originalPath = parser.fileName;
                     final extIndex = originalPath.lastIndexOf('.');
                     final newFilePath = extIndex > 0
-                        ? originalPath.substring(0, extIndex) + '_edited' + originalPath.substring(extIndex)
-                        : originalPath + '_edited';
+                        ? '${originalPath.substring(0, extIndex)}_edited${originalPath.substring(extIndex)}'
+                        : '${originalPath}_edited';
                     final success = await parser.saveEntryBlockToNewFile(newFilePath);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -122,7 +122,7 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
       {'label': 'Datum Spec Block SubType', 'value': entryBlock.nDatumSpecBlockSubType},
     ];
     return DataTable(
-      headingRowColor: MaterialStateProperty.all(Colors.grey[200]),
+      headingRowColor: WidgetStateProperty.all(Colors.grey[200]),
       columns: const [
         DataColumn(label: Text('Trường', style: TextStyle(fontWeight: FontWeight.bold))),
         DataColumn(label: Text('Giá trị', style: TextStyle(fontWeight: FontWeight.bold))),

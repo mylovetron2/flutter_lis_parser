@@ -244,8 +244,9 @@ class _ChartScreenState extends State<ChartScreen> {
       for (final curve in chartConfig.depthTrack.curves) {
         if (curve.isVisible && curve.dataPoints.isNotEmpty) {
           for (final point in curve.dataPoints) {
-            if (point.x < minDepth)
+            if (point.x < minDepth) {
               minDepth = point.x; // x is depth for depth track
+            }
             if (point.x > maxDepth) maxDepth = point.x;
           }
         }
