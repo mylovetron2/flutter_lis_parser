@@ -6,17 +6,131 @@ import 'dart:typed_data';
 import '../constants/lis_constants.dart';
 
 class CodeReader {
-  /// Giải mã 4 byte kiểu float LIS về double
-  static double decode32BitFloat(Uint8List entry) {
-    int byte1 = entry[0];
-    int byte2 = entry[1];
-    int byte3 = entry[2];
-    int byte4 = entry[3];
+  // Chuyển số thập phân sang chuỗi bát phân (octal)
+  String toOctal(double value, {int precision = 6}) {
+    int intPart = value.floor();
+    double fracPart = value - intPart;
+    String octal = '${intPart.toRadixString(8)}.';
+    for (int i = 0; i < precision; i++) {
+      fracPart *= 8;
+      int digit = fracPart.floor();
+      octal += digit.toString();
+      fracPart -= digit;
+    }
+    return octal;
+  }
 
-    int ePart = ((byte1 << 1) & 0xFF) + (byte2 >= 128 ? 1 : 0);
-    int mPart = ((byte2 << 16) | (byte3 << 8) | byte4) & 0x7FFFFF;
+  static Uint8List encodeCode68(double value) {
+    if (value == 0.0) return Uint8List.fromList([0, 0, 0, 0]);
+    int signBit, exponent, fraction;
+    double absValue = value.abs();
+    // Chuyển thập phân sang bát phân trước
+    String octalStrFull = CodeReader().toOctal(
+      absValue,
+      precision: 8,
+    ); // VD: "231.31415..."
+    List<String> parts = octalStrFull.split('.');
+    int intPartOctal = int.parse(parts[0]);
+    String fracPartOctalStr = parts.length > 1 ? parts[1] : '';
+    // Chuẩn hóa về dạng M*2^E, M thuộc [0.5, 1.0)
+    int E = 0;
+    double norm = absValue;
+    while (norm >= 1.0) {
+      norm /= 2.0;
+      E++;
+    }
+    while (norm < 0.5) {
+      norm *= 2.0;
+      E--;
+    }
+    //E++;
+    // Lấy phần thập phân nhị phân
+    double fracBinNorm = norm - norm.floor();
+    int fracBits = 0;
+    double frac = fracBinNorm;
+    for (int i = 0; i < 23; i++) {
+      frac *= 2;
+      if (frac >= 1.0) {
+        fracBits |= (1 << (22 - i));
+        frac -= 1.0;
+      }
+    }
+    if (value >= 0) {
+      signBit = 0;
+      exponent = E + 128;
+      fraction = fracBits;
+    } else {
+      signBit = 1;
+      exponent = 127 - E;
+      fraction = (~fracBits + 1) & 0x7FFFFF;
+    }
+    print(
+      'encodeCode68: S = \u001b[33m$signBit\u001b[0m, E (bin) = \u001b[32m$E\u001b[0m, exponent = \u001b[36m$exponent\u001b[0m, F = \u001b[35m$fraction\u001b[0m',
+    );
+    int byte0 = (signBit << 7) | ((exponent & 0xFF) >> 1);
+    int byte1 = ((exponent & 0x1) << 7) | ((fraction >> 16) & 0x7F);
+    int byte2 = (fraction >> 8) & 0xFF;
+    int byte3 = fraction & 0xFF;
+    return Uint8List.fromList([byte0, byte1, byte2, byte3]);
+  }
 
-    double M = 0;
+  static double decodeCode68(Uint8List bytes) {
+    if (bytes.length != 4) throw ArgumentError('Code68 requires 4 bytes');
+    int b0 = bytes[0];
+    int b1 = bytes[1];
+    int b2 = bytes[2];
+    int b3 = bytes[3];
+    int signBit = (b0 >> 7) & 0x1;
+    int exponent = ((b0 & 0x7F) << 1) | ((b1 >> 7) & 0x1);
+    int fraction = ((b1 & 0x7F) << 16) | (b2 << 8) | b3;
+    if (signBit == 0) {
+      // Số dương
+      double frac = 0.0;
+      for (int i = 0; i < 23; i++) {
+        if ((fraction & (1 << (22 - i))) != 0) {
+          frac += math.pow(2.0, -(i + 1));
+        }
+      }
+      double M = frac;
+      int E = exponent - 128;
+      return M * math.pow(2.0, E);
+    } else {
+      // Số âm
+      int E = 127 - exponent;
+      // Mantissa là phần bù hai
+      int fracBits = (~fraction + 1) & 0x7FFFFF;
+      double frac = 0.0;
+      for (int i = 0; i < 23; i++) {
+        if ((fracBits & (1 << (22 - i))) != 0) {
+          frac += math.pow(2.0, -(i + 1));
+        }
+      }
+      double M = frac - 1.0;
+      return M * math.pow(2.0, E);
+    }
+  }
+
+  /// Mã hóa ngược lại từ double sang 4 byte kiểu float LIS (dựa trên _read32BitFloat)
+  static Uint8List encode32BitFloatReverse(double value) {
+    if (value == 0.0) return Uint8List.fromList([0, 0, 0, 0]);
+    bool isNegative = value < 0;
+    double absValue = value.abs();
+    int E;
+    double M;
+    if (!isNegative) {
+      // value = M * 2^(E - 128)
+      double log2 = math.log(absValue) / math.ln2;
+      E = (log2 + 128).floor();
+      M = absValue / math.pow(2.0, E - 128);
+    } else {
+      // value = -M * 2^(127 - E)
+      double log2 = math.log(absValue) / math.ln2;
+      E = (127 - log2).floor();
+      M = absValue / math.pow(2.0, 127 - E);
+    }
+    // Chuyển M thành mPart (giống decode)
+    int mPart = 0;
+    double remain = M;
     List<double> factor = [
       0,
       0.5,
@@ -43,27 +157,23 @@ class CodeReader {
       0.0000002384185791015625,
       0.00000011920928955078125,
     ];
-
-    if (byte1 >= 128) {
+    for (int i = 1; i < factor.length; i++) {
+      if (remain >= factor[i]) {
+        mPart |= (1 << (23 - (i - 1)));
+        remain -= factor[i];
+      }
+    }
+    if (isNegative) {
       mPart = (~mPart + 1) & 0x7FFFFF;
     }
-
-    int E = ePart;
-    int mPart2 = mPart << 8;
-    for (int i = 0; i < 24; i++) {
-      if ((mPart2 & 0x80000000) == 0x80000000) M += factor[i];
-      mPart2 = mPart2 << 1;
-    }
-
-    double value;
-    if (byte1 < 128) {
-      value = M * math.pow(2.0, E - 128);
-    } else {
-      value = (M.abs() < 0.00000001) ? 0 : -M * math.pow(2.0, 127 - E);
-    }
-
-    return value;
+    int byte1 = isNegative ? (E >> 1) | 0x80 : (E >> 1);
+    int byte2 = ((E & 1) << 7) | ((mPart >> 16) & 0x7F);
+    int byte3 = (mPart >> 8) & 0xFF;
+    int byte4 = mPart & 0xFF;
+    return Uint8List.fromList([byte1, byte2, byte3, byte4]);
   }
+
+  /// Giải mã 4 byte kiểu float LIS về double
 
   static dynamic readCode(Uint8List entry, int reprCode, int size) {
     switch (reprCode) {
@@ -282,10 +392,6 @@ class CodeReader {
     return Uint8List.fromList([v & 0xFF]);
   }
 
-  // static Uint8List encode32BitFloat(dynamic value) {
-  //   double v = value is num ? value.toDouble() : 0.0;
-  //   return CodeReader.encode32BitFloat(v);
-  // }
   static Uint8List encode32BitFloat(double value) {
     if (value == 0.0) return Uint8List.fromList([0, 0, 0, 0]);
     bool isNegative = value < 0;
@@ -391,7 +497,10 @@ class CodeReader {
       case 66:
         return encodeUnsignedByte(value);
       case 68:
-        return encode32BitFloat(value);
+        //return encode32BitFloat(value);
+        //return encode32BitFloatReverse(value);
+        //return encodeCode68(value);
+        return _encodeRussianLisFloat(value);
       case 73:
         return encode32BitInteger(value);
       case 79:
@@ -399,5 +508,73 @@ class CodeReader {
       default:
         throw Exception('Unknown representation code for encode: $reprCode');
     }
+  }
+
+  static _encodeRussianLisFloat(double value) {
+    // Custom encoding algorithm matching C++ ReadCode logic
+    print('DEBUG ENCODE: input value=$value');
+
+    if (value == 0.0) {
+      final result = Uint8List.fromList([0, 0, 0, 0]);
+      print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
+      return result;
+    }
+
+    // Handle sign bit
+    bool isNegative = value < 0;
+    double absValue = value.abs();
+
+    // Normalize fraction to [0.5, 1.0) range
+    double targetFraction = absValue;
+    int exponentBits = isNegative ? 127 : 128;
+
+    while (targetFraction >= 1.0) {
+      targetFraction /= 2.0;
+      exponentBits++;
+    }
+    while (targetFraction < 0.5) {
+      targetFraction *= 2.0;
+      exponentBits--;
+    }
+
+    // Clamp exponent to valid range
+    exponentBits = exponentBits.clamp(0, 255);
+
+    // Convert fraction to 23-bit mantissa using C++ algorithm
+    int mantissaBits = 0;
+    double remainingFraction = targetFraction;
+    double bitValue = 0.5;
+    for (int i = 22; i >= 0; i--) {
+      if (remainingFraction >= bitValue) {
+        mantissaBits |= (1 << i);
+        remainingFraction -= bitValue;
+      }
+      bitValue /= 2.0;
+    }
+
+    // Handle negative numbers - C++ does complement operation
+    if (isNegative) {
+      mantissaBits = (~mantissaBits + 1) & 0x7FFFFF;
+    }
+
+    // Assemble the 32-bit result
+    int result = 0;
+    if (isNegative) {
+      result |= 0x80000000; // Sign bit
+    }
+    result |= (exponentBits << 23); // Exponent (8 bits)
+    result |= mantissaBits; // Mantissa (23 bits)
+
+    // Extract bytes in big-endian order
+    int ch0 = (result >> 24) & 0xFF;
+    int ch1 = (result >> 16) & 0xFF;
+    int ch2 = (result >> 8) & 0xFF;
+    int ch3 = result & 0xFF;
+
+    final encoded = Uint8List.fromList([ch0, ch1, ch2, ch3]);
+    print(
+      'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
+    );
+    return encoded;
   }
 }

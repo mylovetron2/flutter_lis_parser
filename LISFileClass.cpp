@@ -180,9 +180,6 @@ int LISMisc::ReadReprCode(BYTE byteArr[], int nCount, int nReprCode,
 	
         return 1;
     }
-
-
-
 	
 	// REPRCODE_56 - 8 bit integer
     if (nReprCode == REPRCODE_56)//8 bit integer
@@ -229,9 +226,6 @@ int LISMisc::ReadReprCode(BYTE byteArr[], int nCount, int nReprCode,
 		
         return 1;
     }
-
-
-
 	
 	//REPRCODE_66 - unsigned 8-bit integer
     if (nReprCode == REPRCODE_66)//unsigned 8-bit integer

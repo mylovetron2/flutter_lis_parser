@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 // Removed unused import 'dart:math'
 import 'dart:typed_data';
 
@@ -13,6 +12,41 @@ import '../models/well_info_block.dart';
 import 'code_reader.dart';
 
 class LisFileParser {
+  /// Ghi giá trị Depth vào tất cả các data record (type 0), mỗi record giảm dần 0.5
+  Future<void> setDepthForAllRecords(File fileLIS, double startDepth) async {
+    if (lisRecords.isEmpty) return;
+    final dataRecords = lisRecords.where((r) => r.type == 0).toList();
+    if (dataRecords.isEmpty) return;
+
+    // Đọc toàn bộ file vào bộ nhớ
+    final fileBytes = await fileLIS.readAsBytes();
+    double depth = startDepth;
+    for (final record in dataRecords) {
+      // Bỏ qua 2 byte header, ghi depth vào 4 byte tiếp theo
+      final offset = record.addr + 2;
+      if (offset + 4 > fileBytes.length) continue;
+      // Mã hóa depth theo DepthRepr
+      final depthBytes = CodeReader.encode(depth, entryBlock.nDepthRepr, 4);
+      for (int i = 0; i < 4; i++) {
+        fileBytes[offset + i] = depthBytes[i];
+      }
+      depth -= 1;
+    }
+    // Ghi lại file mới
+    final filePath = fileLIS.path;
+    final extIndex = filePath.lastIndexOf('.');
+    final now = DateTime.now();
+    final timeStr =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+    final newFileName = extIndex > 0
+        ? '${filePath.substring(0, extIndex)}_depth_$timeStr${filePath.substring(extIndex)}'
+        : '${filePath}_depth_$timeStr';
+    await File(newFileName).writeAsBytes(fileBytes);
+    print(
+      'Đã ghi giá trị Depth vào tất cả data record, file mới: $newFileName',
+    );
+  }
+
   /// Ghi tableData ra file LIS mới, tự động tạo tên file mới dựa trên file gốc và thời gian
   Future<bool> saveTableDataToNewFileAuto(
     List<Map<String, dynamic>> tableData,
@@ -451,9 +485,11 @@ class LisFileParser {
     bytes.add(6);
     bytes.add(4);
     bytes.add(68);
-    final refPointBytes = ByteData(4)
-      ..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
-    bytes.addAll(refPointBytes.buffer.asUint8List());
+    // final refPointBytes = ByteData(4)
+    //   ..setFloat32(0, entryBlock.fDataRefPoint, Endian.little);
+    // bytes.addAll(refPointBytes.buffer.asUint8List());
+    final refPointBytes = CodeReader.encode(entryBlock.fDataRefPoint, 68, -1);
+    bytes.addAll(refPointBytes);
 
     // Trường 7: strDataRefPointUnit (4 byte ASCII, reprCode 65)
     bytes.add(7);
@@ -466,7 +502,8 @@ class LisFileParser {
     bytes.add(8);
     bytes.add(4);
     bytes.add(68);
-    final spacingBytes = _encodeRussianLisFloat(entryBlock.fFrameSpacing);
+    //final spacingBytes = _encodeRussianLisFloat(entryBlock.fFrameSpacing);
+    final spacingBytes = CodeReader.encode(entryBlock.fFrameSpacing, 68, -1);
     bytes.addAll(spacingBytes);
 
     // Trường 9: strFrameSpacingUnit (4 byte ASCII, reprCode 65)
@@ -2388,9 +2425,12 @@ class LisFileParser {
 
       // Tạo đường dẫn file mới để lưu (không ghi đè file gốc)
       final extIndex = fileName.lastIndexOf('.');
+      final now = DateTime.now();
+      final timeStr =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
       final newFileName = extIndex > 0
-          ? '${fileName.substring(0, extIndex)}_modified${fileName.substring(extIndex)}'
-          : '${fileName}_modified';
+          ? '${fileName.substring(0, extIndex)}_$timeStr${fileName.substring(extIndex)}'
+          : '${fileName}_$timeStr';
       print('Lưu thay đổi vào file mới: $newFileName');
 
       // Read entire file into memory
@@ -2469,6 +2509,10 @@ class LisFileParser {
       print('');
       _pendingChanges.clear();
 
+      // Gọi hàm setDepthForAllRecords để cập nhật lại Depth cho tất cả các record
+      // Sử dụng file mới vừa ghi
+      await setDepthForAllRecords(File(newFileName), 600.0);
+
       await closeLisFile();
       return true;
     } catch (e) {
@@ -2477,6 +2521,7 @@ class LisFileParser {
     }
   }
 
+  /*
   // Russian LIS Float Encoder (reprCode 68) - Exact reverse of C++ ReadCode
   Uint8List _encodeRussianLisFloat(double value) {
     if (value == 0.0) return Uint8List.fromList([0, 0, 0, 0]);
@@ -2506,7 +2551,7 @@ class LisFileParser {
     int byte4 = 0;
     return Uint8List.fromList([byte1, byte2, byte3, byte4]);
   }
-
+*/
   /// Lưu dataRecord type 0 vào file LIS, chuyển đổi dữ liệu theo reprCode
   /// Lưu tableData ra file, chuyển từng giá trị thành bytes theo reprCode của từng cột
   Future<void> saveDataRecordsType0ToLIS({

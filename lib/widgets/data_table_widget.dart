@@ -150,7 +150,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       // debug: TXT timeToDepth mapping computed
       // Merge vào tableData
       int matchCount = 0;
-      final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPTH';
+      final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
       // Lấy số frame/record động từ parser
       int framesPerRecord = 1;
       if (widget.parser.startDataRec >= 0 &&
