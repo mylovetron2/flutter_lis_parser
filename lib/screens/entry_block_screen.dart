@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
+
 import '../models/entry_block.dart';
 import '../services/lis_file_parser.dart';
 
 class EntryBlockScreen extends StatefulWidget {
   final EntryBlock entryBlock;
   final LisFileParser parser;
-  const EntryBlockScreen({super.key, required this.entryBlock, required this.parser});
+  const EntryBlockScreen({
+    super.key,
+    required this.entryBlock,
+    required this.parser,
+  });
 
   @override
   State<EntryBlockScreen> createState() => _EntryBlockScreenState();
 }
-  
-
 
 class _EntryBlockScreenState extends State<EntryBlockScreen> {
   final TextEditingController _filePathController = TextEditingController();
@@ -64,12 +67,16 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
                     final newFilePath = extIndex > 0
                         ? '${originalPath.substring(0, extIndex)}_edited${originalPath.substring(extIndex)}'
                         : '${originalPath}_edited';
-                    final success = await parser.saveEntryBlockToNewFile(newFilePath);
+                    final success = await parser.saveEntryBlockToNewFile(
+                      newFilePath,
+                    );
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(success
-                            ? 'Đã lưu EntryBlock vào file mới: $newFilePath'
-                            : 'Lưu EntryBlock vào file mới thất bại!'),
+                        content: Text(
+                          success
+                              ? 'Đã lưu EntryBlock vào file mới: $newFilePath'
+                              : 'Lưu EntryBlock vào file mới thất bại!',
+                        ),
                       ),
                     );
                   },
@@ -105,32 +112,84 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
 
   Widget _buildTable(EntryBlock entryBlock) {
     final fields = <Map<String, Object>>[
-      {'label': 'Data Record Type', 'value': entryBlock.nDataRecordType},
-      {'label': 'Datum Spec Block Type', 'value': entryBlock.nDatumSpecBlockType},
-      {'label': 'Data Frame Size', 'value': entryBlock.nDataFrameSize},
-      {'label': 'Direction', 'value': entryBlock.nDirection},
-      {'label': 'Optical Depth Unit', 'value': entryBlock.nOpticalDepthUnit},
-      {'label': 'Data Ref Point', 'value': entryBlock.fDataRefPoint},
-      {'label': 'Data Ref Point Unit', 'value': entryBlock.strDataRefPointUnit},
-      {'label': 'Frame Spacing', 'value': entryBlock.fFrameSpacing},
-      {'label': 'Frame Spacing Unit', 'value': entryBlock.strFrameSpacingUnit},
-      {'label': 'Max Frames Per Record', 'value': entryBlock.nMaxFramesPerRecord},
-      {'label': 'Absent Value', 'value': entryBlock.fAbsentValue},
-      {'label': 'Depth Recording Mode', 'value': entryBlock.nDepthRecordingMode},
-      {'label': 'Depth Unit', 'value': entryBlock.strDepthUnit},
-      {'label': 'Depth Repr', 'value': entryBlock.nDepthRepr},
-      {'label': 'Datum Spec Block SubType', 'value': entryBlock.nDatumSpecBlockSubType},
+      {
+        'label': 'Data Record Type',
+        'value': entryBlock.nDataRecordType,
+        'note': '',
+      },
+      {
+        'label': 'Datum Spec Block Type',
+        'value': entryBlock.nDatumSpecBlockType,
+        'note': '',
+      },
+      {
+        'label': 'Data Frame Size',
+        'value': entryBlock.nDataFrameSize,
+        'note': '',
+      },
+      {
+        'label': 'Direction',
+        'value': entryBlock.nDirection,
+        'note': '1 UP 255 DOWN',
+      },
+      {
+        'label': 'Optical Depth Unit',
+        'value': entryBlock.nOpticalDepthUnit,
+        'note': '0:TIME 1:FEET 255:M',
+      },
+      {
+        'label': 'Data Ref Point',
+        'value': entryBlock.fDataRefPoint,
+        'note': '',
+      },
+      {
+        'label': 'Data Ref Point Unit',
+        'value': entryBlock.strDataRefPointUnit,
+        'note': '',
+      },
+      {'label': 'Frame Spacing', 'value': entryBlock.fFrameSpacing, 'note': ''},
+      {
+        'label': 'Frame Spacing Unit',
+        'value': entryBlock.strFrameSpacingUnit,
+        'note': '',
+      },
+      {
+        'label': 'Max Frames Per Record',
+        'value': entryBlock.nMaxFramesPerRecord,
+        'note': '',
+      },
+      {'label': 'Absent Value', 'value': entryBlock.fAbsentValue, 'note': ''},
+      {
+        'label': 'Depth Recording Mode',
+        'value': entryBlock.nDepthRecordingMode,
+        'note': '0 Mỗi Frame đều chứa độ sâu của riêng nó.',
+      },
+      {'label': 'Depth Unit', 'value': entryBlock.strDepthUnit, 'note': ''},
+      {'label': 'Depth Repr', 'value': entryBlock.nDepthRepr, 'note': ''},
+      {
+        'label': 'Datum Spec Block SubType',
+        'value': entryBlock.nDatumSpecBlockSubType,
+        'note': '',
+      },
     ];
     return DataTable(
       headingRowColor: WidgetStateProperty.all(Colors.grey[200]),
       columns: const [
-        DataColumn(label: Text('Trường', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('Giá trị', style: TextStyle(fontWeight: FontWeight.bold))),
+        DataColumn(
+          label: Text('Trường', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text('Giá trị', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text('Ghi chú', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
       ],
       rows: List.generate(fields.length, (index) {
         final field = fields[index];
         final label = field['label'].toString();
         final value = field['value'];
+        final note = field['note']?.toString() ?? '';
         final isEditable = _editableFields.contains(label);
         return DataRow(
           cells: [
@@ -162,13 +221,21 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
                               setState(() {
                                 _editingIndex = index;
                                 _editingController?.dispose();
-                                _editingController = TextEditingController(text: value.toString());
+                                _editingController = TextEditingController(
+                                  text: value.toString(),
+                                );
                               });
                             }
                           : null,
-                      child: Text(value.toString(), style: isEditable ? const TextStyle(color: Colors.blue) : null),
+                      child: Text(
+                        value.toString(),
+                        style: isEditable
+                            ? const TextStyle(color: Colors.blue)
+                            : null,
+                      ),
                     ),
             ),
+            DataCell(Text(note)),
           ],
         );
       }),
@@ -180,40 +247,49 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
     final entryBlock = widget.entryBlock;
     switch (label) {
       case 'Data Record Type':
-        entryBlock.nDataRecordType = int.tryParse(newValue) ?? entryBlock.nDataRecordType;
+        entryBlock.nDataRecordType =
+            int.tryParse(newValue) ?? entryBlock.nDataRecordType;
         break;
       case 'Datum Spec Block Type':
-        entryBlock.nDatumSpecBlockType = int.tryParse(newValue) ?? entryBlock.nDatumSpecBlockType;
+        entryBlock.nDatumSpecBlockType =
+            int.tryParse(newValue) ?? entryBlock.nDatumSpecBlockType;
         break;
       case 'Data Frame Size':
-        entryBlock.nDataFrameSize = int.tryParse(newValue) ?? entryBlock.nDataFrameSize;
+        entryBlock.nDataFrameSize =
+            int.tryParse(newValue) ?? entryBlock.nDataFrameSize;
         break;
       case 'Direction':
         entryBlock.nDirection = int.tryParse(newValue) ?? entryBlock.nDirection;
         break;
       case 'Optical Depth Unit':
-        entryBlock.nOpticalDepthUnit = int.tryParse(newValue) ?? entryBlock.nOpticalDepthUnit;
+        entryBlock.nOpticalDepthUnit =
+            int.tryParse(newValue) ?? entryBlock.nOpticalDepthUnit;
         break;
       case 'Data Ref Point':
-        entryBlock.fDataRefPoint = double.tryParse(newValue) ?? entryBlock.fDataRefPoint;
+        entryBlock.fDataRefPoint =
+            double.tryParse(newValue) ?? entryBlock.fDataRefPoint;
         break;
       case 'Data Ref Point Unit':
         entryBlock.strDataRefPointUnit = newValue;
         break;
       case 'Frame Spacing':
-        entryBlock.fFrameSpacing = double.tryParse(newValue) ?? entryBlock.fFrameSpacing;
+        entryBlock.fFrameSpacing =
+            double.tryParse(newValue) ?? entryBlock.fFrameSpacing;
         break;
       case 'Frame Spacing Unit':
         entryBlock.strFrameSpacingUnit = newValue;
         break;
       case 'Max Frames Per Record':
-        entryBlock.nMaxFramesPerRecord = int.tryParse(newValue) ?? entryBlock.nMaxFramesPerRecord;
+        entryBlock.nMaxFramesPerRecord =
+            int.tryParse(newValue) ?? entryBlock.nMaxFramesPerRecord;
         break;
       case 'Absent Value':
-        entryBlock.fAbsentValue = double.tryParse(newValue) ?? entryBlock.fAbsentValue;
+        entryBlock.fAbsentValue =
+            double.tryParse(newValue) ?? entryBlock.fAbsentValue;
         break;
       case 'Depth Recording Mode':
-        entryBlock.nDepthRecordingMode = int.tryParse(newValue) ?? entryBlock.nDepthRecordingMode;
+        entryBlock.nDepthRecordingMode =
+            int.tryParse(newValue) ?? entryBlock.nDepthRecordingMode;
         break;
       case 'Depth Unit':
         entryBlock.strDepthUnit = newValue;
@@ -222,7 +298,8 @@ class _EntryBlockScreenState extends State<EntryBlockScreen> {
         entryBlock.nDepthRepr = int.tryParse(newValue) ?? entryBlock.nDepthRepr;
         break;
       case 'Datum Spec Block SubType':
-        entryBlock.nDatumSpecBlockSubType = int.tryParse(newValue) ?? entryBlock.nDatumSpecBlockSubType;
+        entryBlock.nDatumSpecBlockSubType =
+            int.tryParse(newValue) ?? entryBlock.nDatumSpecBlockSubType;
         break;
     }
   }

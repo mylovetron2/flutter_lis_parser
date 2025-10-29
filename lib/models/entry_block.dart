@@ -3,7 +3,7 @@ class EntryBlock {
   int nDatumSpecBlockType = 0;
   int nDataFrameSize = 0;
   int nDirection = 0; // 1 UP   255 DOWN
-  int nOpticalDepthUnit = 0;
+  int nOpticalDepthUnit = 0; // 0 TIME 1 FEET 255 M
   double fDataRefPoint = 0;
   String strDataRefPointUnit = '';
   double fFrameSpacing = 0;

@@ -12,6 +12,225 @@ import '../models/well_info_block.dart';
 import 'code_reader.dart';
 
 class LisFileParser {
+  double parseTimeToSeconds(String timeStr) {
+    final parts = timeStr.split(':').map((e) => e.trim()).toList();
+    double seconds = 0;
+    if (parts.length == 5) {
+      seconds += (double.tryParse(parts[0]) ?? 0) * 86400;
+      seconds += (double.tryParse(parts[1]) ?? 0) * 3600;
+      seconds += (double.tryParse(parts[2]) ?? 0) * 60;
+      seconds += double.tryParse(parts[3]) ?? 0;
+      seconds += (double.tryParse(parts[4]) ?? 0) / 1000.0;
+    } else if (parts.length == 4) {
+      seconds += (double.tryParse(parts[0]) ?? 0) * 86400;
+      seconds += (double.tryParse(parts[1]) ?? 0) * 3600;
+      seconds += (double.tryParse(parts[2]) ?? 0) * 60;
+      seconds += double.tryParse(parts[3]) ?? 0;
+    } else if (parts.length == 3) {
+      seconds += (double.tryParse(parts[0]) ?? 0) * 3600;
+      seconds += (double.tryParse(parts[1]) ?? 0) * 60;
+      seconds += double.tryParse(parts[2]) ?? 0;
+    } else if (parts.length == 2) {
+      seconds += (double.tryParse(parts[0]) ?? 0) * 60;
+      seconds += double.tryParse(parts[1]) ?? 0;
+    } else if (parts.length == 1) {
+      seconds += double.tryParse(parts[0]) ?? 0;
+    }
+    return seconds;
+  }
+
+  Future<(int, String?)> mergeDepthFromTxt({
+    required String txtContent,
+    required List<Map<String, dynamic>> tableData,
+    required List<String> columnNames,
+  }) async {
+    try {
+      final lines = txtContent
+          .split(RegExp(r'\r?\n'))
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
+      if (lines.length < 2) {
+        return (0, 'File TXT không hợp lệ!');
+      }
+      int headerIdx = -1;
+      List<String> txtHeader = [];
+      for (int i = 0; i < lines.length; ++i) {
+        final cols = lines[i]
+            .split(RegExp(r'\s+|,|;|\t'))
+            .map((e) => e.trim().toUpperCase())
+            .toList();
+        if (cols.contains('TIME') &&
+            (cols.contains('DEPTH') || cols.contains('DEPT'))) {
+          headerIdx = i;
+          txtHeader = lines[i]
+              .split(RegExp(r'\s+|,|;|\t'))
+              .map((e) => e.trim())
+              .toList();
+          break;
+        }
+      }
+      if (headerIdx == -1) {
+        return (0, 'Không tìm thấy dòng header chứa TIME và DEPTH!');
+      }
+      final timeIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'TIME');
+      int depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPTH');
+      if (depthIdx == -1) {
+        depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPT');
+      }
+      if (timeIdx == -1 || depthIdx == -1) {
+        return (0, 'File TXT thiếu cột TIME hoặc DEPTH!');
+      }
+
+      final Map<String, String> timeToDepth = {};
+      for (var i = headerIdx + 1; i < lines.length; ++i) {
+        final row = lines[i].split(RegExp(r'\s+|,|;|\t'));
+        if (row.length > depthIdx && row.length > timeIdx) {
+          final timeSec = parseTimeToSeconds(row[timeIdx]);
+          timeToDepth[timeSec.toString()] = row[depthIdx];
+        }
+      }
+      int matchCount = 0;
+      final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
+      int framesPerRecord = 1;
+      if (startDataRec >= 0 && endDataRec >= startDataRec) {
+        framesPerRecord = getFrameNum(startDataRec);
+        if (framesPerRecord <= 0) framesPerRecord = 1;
+      }
+
+      // Chuẩn hóa dữ liệu sau khi merge DEPTH
+      //normalizeTableData(tableData, columnNames);
+
+      for (int i = tableData.length - 1; i >= 0; --i) {
+        final row = tableData[i];
+        final rawTime = row['TIME'];
+        if (rawTime == null) {
+          continue;
+        }
+        double? timeNum;
+        if (rawTime is num) {
+          timeNum = rawTime.toDouble();
+        } else {
+          timeNum = double.tryParse(rawTime.toString());
+        }
+        if (timeNum == null) {
+          continue;
+        }
+        final timeVal = (timeNum / 1000).toString();
+        if (timeToDepth.containsKey(timeVal)) {
+          final newDepth = timeToDepth[timeVal];
+          if (newDepth != null && newDepth != row[targetCol]?.toString()) {
+            tableData[i][targetCol] = newDepth;
+            final recordIndex = i ~/ framesPerRecord;
+            final frameIndex = i % framesPerRecord;
+            await updateDataValue(
+              recordIndex: recordIndex,
+              frameIndex: frameIndex,
+              columnName: targetCol,
+              newValue: double.tryParse(newDepth) ?? 0.0,
+            );
+            matchCount++;
+          }
+        } else {
+          tableData.removeAt(i);
+          markRowDeleted(i);
+        }
+      }
+
+      return (matchCount, null);
+    } catch (e) {
+      return (0, 'Lỗi merge: $e');
+    }
+  }
+
+  /// Chuẩn hóa, sắp xếp, tìm step, hồi quy tuyến tính cho DEPT
+  void normalizeTableData(
+    List<Map<String, dynamic>> data,
+    List<String> columnNames,
+  ) {
+    if (data.isEmpty || data.length < 2) return;
+
+    // 1. Xác định xu hướng chính (tăng hoặc giảm)
+    final deptCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
+    final deptValues = data
+        .map((row) => double.tryParse(row[deptCol]?.toString() ?? '') ?? 0.0)
+        .toList();
+    int increaseCount = 0, decreaseCount = 0;
+    for (int i = 1; i < deptValues.length; i++) {
+      if (deptValues[i] > deptValues[i - 1]) increaseCount++;
+      if (deptValues[i] < deptValues[i - 1]) decreaseCount++;
+    }
+    final isIncreasing = increaseCount >= decreaseCount;
+    print(
+      '[DEBUG][normalizeTableData] Xu hướng chính: ${isIncreasing ? 'Tăng' : 'Giảm'} (increaseCount=$increaseCount, decreaseCount=$decreaseCount)',
+    );
+
+    // 2. Sắp xếp dữ liệu DEPT theo xu hướng chính (in-place)
+    data.sort((a, b) {
+      final da = double.tryParse(a[deptCol]?.toString() ?? '') ?? 0.0;
+      final db = double.tryParse(b[deptCol]?.toString() ?? '') ?? 0.0;
+      return isIncreasing ? da.compareTo(db) : db.compareTo(da);
+    });
+    print(
+      '[DEBUG][normalizeTableData] Dữ liệu đã sắp xếp theo xu hướng $deptCol. Giá trị đầu: ${data.first[deptCol]}, cuối: ${data.last[deptCol]}',
+    );
+
+    // 3. Tìm xu hướng step chính
+    final steps = <double>[];
+    for (int i = 1; i < data.length; i++) {
+      final prev =
+          double.tryParse(data[i - 1][deptCol]?.toString() ?? '') ?? 0.0;
+      final curr = double.tryParse(data[i][deptCol]?.toString() ?? '') ?? 0.0;
+      steps.add((curr - prev).abs());
+    }
+    print(
+      '[DEBUG][normalizeTableData] Các step giữa các giá trị DEPT: ${steps.take(10).toList()}...',
+    );
+    double mainStep = 0.0;
+    if (steps.isNotEmpty) {
+      final stepCounts = <double, int>{};
+      for (final s in steps) {
+        final rounded = double.parse(s.toStringAsFixed(2));
+        stepCounts[rounded] = (stepCounts[rounded] ?? 0) + 1;
+      }
+      mainStep = stepCounts.entries
+          .reduce((a, b) => a.value > b.value ? a : b)
+          .key;
+      print(
+        '[DEBUG][normalizeTableData] Step chính (mode): $mainStep, counts: $stepCounts',
+      );
+    }
+
+    // 4. Ép về step chuẩn (0.1, 0.5, 1, 10, 20 ...)
+    final allowedSteps = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100];
+    double chosenStep = allowedSteps
+        .reduce((a, b) => (mainStep - a).abs() < (mainStep - b).abs() ? a : b)
+        .toDouble();
+    print('[DEBUG][normalizeTableData] Step chuẩn được chọn: $chosenStep');
+
+    // 5. Làm tròn Depth đầu tiên
+    double firstDepth =
+        double.tryParse(data.first[deptCol]?.toString() ?? '') ?? 0.0;
+    firstDepth = double.parse(firstDepth.toStringAsFixed(2));
+    print(
+      '[DEBUG][normalizeTableData] Depth đầu tiên sau làm tròn: $firstDepth',
+    );
+
+    // 6. Hồi quy tuyến tính để xử lý DEPT theo step chính (in-place)
+    for (int i = 0; i < data.length; i++) {
+      final newDepth = isIncreasing
+          ? firstDepth + i * chosenStep
+          : firstDepth - i * chosenStep;
+      data[i][deptCol] = newDepth.toStringAsFixed(3);
+    }
+    print(
+      '[DEBUG][normalizeTableData] Đã hồi quy tuyến tính DEPT, ví dụ 10 dòng đầu:',
+    );
+    for (int i = 0; i < data.length && i < 10; i++) {
+      print('Row $i: ${data[i][deptCol]}');
+    }
+    // Ghi chú: Các bước xử lý gồm xác định xu hướng, sắp xếp, tìm step, ép về step, làm tròn depth đầu, hồi quy tuyến tính
+  }
+
   /// Ghi giá trị Depth vào tất cả các data record (type 0), mỗi record giảm dần 0.5
   Future<void> setDepthForAllRecords(File fileLIS, double startDepth) async {
     if (lisRecords.isEmpty) return;
@@ -30,7 +249,7 @@ class LisFileParser {
       for (int i = 0; i < 4; i++) {
         fileBytes[offset + i] = depthBytes[i];
       }
-      depth -= 1;
+      depth -= 5;
     }
     // Ghi lại file mới
     final filePath = fileLIS.path;
@@ -55,6 +274,8 @@ class LisFileParser {
       print('[DEBUG][SAVE] file is null hoặc tableData rỗng');
       return false;
     }
+
+    normalizeTableData(tableData, getColumnNames());
 
     // Đọc toàn bộ file gốc vào buffer
     final originalFile = File(fileName);
@@ -2192,46 +2413,6 @@ class LisFileParser {
     print('Cleared all pending changes');
   }
 
-  /*
-  // Method to save all pending changes to the actual LIS file
-  Future<bool> savePendingChanges() async {
-    print('DEBUG TEST: savePendingChanges called');
-    print('');
-    print('========================================');
-    print('SAVE PENDING CHANGES CALLED!');
-    print('File being saved: $fileName');
-    print('========================================');
-    print('Pending changes count: ${_pendingChanges.length}');
-
-    if (_pendingChanges.isEmpty) {
-      print('No pending changes to save');
-      return true;
-    }
-
-    try {
-      print('Saving ${_pendingChanges.length} pending changes to file...');
-      print('File name: $fileName');
-
-      // Chuẩn bị dữ liệu tableData mới từ các thay đổi
-      // (Ở đây bạn cần build lại tableData từ dữ liệu gốc và các thay đổi trong _pendingChanges)
-      // Giả sử bạn đã có hàm getTableData() trả về dữ liệu hiện tại
-      final tableData = await getTableData();
-      final ok = await saveTableDataToNewFileAuto(tableData);
-      if (ok) {
-        print('Successfully saved tableData to data records');
-        _pendingChanges.clear();
-        await closeLisFile();
-        return true;
-      } else {
-        print('Error saving tableData to data records');
-        return false;
-      }
-    } catch (e) {
-      print('Error saving changes to file: $e');
-      return false;
-    }
-  }
-*/
   bool _updateBytesInMemory(
     Uint8List bytes,
     int actualRecordIndex,
@@ -2414,6 +2595,9 @@ class LisFileParser {
     print('========================================');
     print('Pending changes count: ${_pendingChanges.length}');
 
+    final tableData = await getTableData();
+    normalizeTableData(tableData, getColumnNames());
+
     if (_pendingChanges.isEmpty) {
       print('No pending changes to save');
       return true;
@@ -2511,7 +2695,21 @@ class LisFileParser {
 
       // Gọi hàm setDepthForAllRecords để cập nhật lại Depth cho tất cả các record
       // Sử dụng file mới vừa ghi
-      await setDepthForAllRecords(File(newFileName), 600.0);
+      // Tìm giá trị Depth lớn nhất trong tableData
+      final tableDataForDepth = await getTableData();
+      double maxDepth = 0.0;
+      for (final row in tableDataForDepth) {
+        final depthValue = row['DEPT'];
+        if (depthValue != null && depthValue != 'NULL') {
+          final depth = double.tryParse(depthValue.toString()) ?? 0.0;
+          if (depth > maxDepth) {
+            maxDepth = depth;
+          }
+        }
+      }
+      print('Max depth found in tableData: $maxDepth');
+      // Sử dụng maxDepth làm startDepth cho setDepthForAllRecords
+      await setDepthForAllRecords(File(newFileName), maxDepth * 100);
 
       await closeLisFile();
       return true;

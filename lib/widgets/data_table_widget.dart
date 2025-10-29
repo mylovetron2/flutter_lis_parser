@@ -40,6 +40,15 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
   // Merge theo TIME: thay DEPTH trong LIS bằng DEPTH trong TXT
   Future<void> _mergeByTimeFromTxt() async {
+    // Cập nhật lại modifiedValues cho các cell DEPTH đã thay đổi
+    final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
+    modifiedValues.clear();
+    for (int i = 0; i < tableData.length; i++) {
+      final value = tableData[i][targetCol];
+      if (value != null) {
+        modifiedValues['${i}_$targetCol'] = value.toString();
+      }
+    }
     try {
       // Chọn file TXT bằng file picker
       FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -51,158 +60,25 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       if (txtPath == null) return;
       final txtFile = await File(txtPath).readAsString();
 
-      // Parse TXT, tự động tìm dòng header chứa TIME và DEPTH
-      final lines = txtFile
-          .split(RegExp(r'\r?\n'))
-          .where((l) => l.trim().isNotEmpty)
-          .toList();
-      if (lines.length < 2) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('File TXT không hợp lệ!'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      int headerIdx = -1;
-      List<String> txtHeader = [];
-      for (int i = 0; i < lines.length; ++i) {
-        final cols = lines[i]
-            .split(RegExp(r'\s+|,|;|\t'))
-            .map((e) => e.trim().toUpperCase())
-            .toList();
-        if (cols.contains('TIME') &&
-            (cols.contains('DEPTH') || cols.contains('DEPT'))) {
-          headerIdx = i;
-          txtHeader = lines[i]
-              .split(RegExp(r'\s+|,|;|\t'))
-              .map((e) => e.trim())
-              .toList();
-          // debug: TXT header found at line $headerIdx
-          break;
-        }
-      }
-      if (headerIdx == -1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Không tìm thấy dòng header chứa TIME và DEPTH!'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      final timeIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'TIME');
-      int depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPTH');
-      if (depthIdx == -1) {
-        depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPT');
-      }
-      if (timeIdx == -1 || depthIdx == -1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('File TXT thiếu cột TIME hoặc DEPTH!'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-      // Map TIME->DEPTH từ TXT (chuyển TIME sang giây)
-      double parseTimeToSeconds(String timeStr) {
-        // Hỗ trợ các định dạng: d:hh:mm:ss:ms, d:hh:mm:ss, hh:mm:ss, mm:ss, ss
-        final parts = timeStr.split(':').map((e) => e.trim()).toList();
-        double seconds = 0;
-        if (parts.length == 5) {
-          // d:hh:mm:ss:ms
-          seconds += (double.tryParse(parts[0]) ?? 0) * 86400;
-          seconds += (double.tryParse(parts[1]) ?? 0) * 3600;
-          seconds += (double.tryParse(parts[2]) ?? 0) * 60;
-          seconds += double.tryParse(parts[3]) ?? 0;
-          seconds += (double.tryParse(parts[4]) ?? 0) / 1000.0;
-        } else if (parts.length == 4) {
-          // d:hh:mm:ss
-          seconds += (double.tryParse(parts[0]) ?? 0) * 86400;
-          seconds += (double.tryParse(parts[1]) ?? 0) * 3600;
-          seconds += (double.tryParse(parts[2]) ?? 0) * 60;
-          seconds += double.tryParse(parts[3]) ?? 0;
-        } else if (parts.length == 3) {
-          // hh:mm:ss
-          seconds += (double.tryParse(parts[0]) ?? 0) * 3600;
-          seconds += (double.tryParse(parts[1]) ?? 0) * 60;
-          seconds += double.tryParse(parts[2]) ?? 0;
-        } else if (parts.length == 2) {
-          // mm:ss
-          seconds += (double.tryParse(parts[0]) ?? 0) * 60;
-          seconds += double.tryParse(parts[1]) ?? 0;
-        } else if (parts.length == 1) {
-          seconds += double.tryParse(parts[0]) ?? 0;
-        }
-        return seconds;
-      }
-
-      final Map<String, String> timeToDepth = {};
-      for (var i = headerIdx + 1; i < lines.length; ++i) {
-        final row = lines[i].split(RegExp(r'\s+|,|;|\t'));
-        if (row.length > depthIdx && row.length > timeIdx) {
-          final timeSec = parseTimeToSeconds(row[timeIdx]);
-          timeToDepth[timeSec.toString()] = row[depthIdx];
-        }
-      }
-      // debug: TXT timeToDepth mapping computed
-      // Merge vào tableData
-      int matchCount = 0;
-      final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
-      // Lấy số frame/record động từ parser
-      int framesPerRecord = 1;
-      if (widget.parser.startDataRec >= 0 &&
-          widget.parser.endDataRec >= widget.parser.startDataRec) {
-        framesPerRecord = widget.parser.getFrameNum(widget.parser.startDataRec);
-        if (framesPerRecord <= 0) framesPerRecord = 1;
-      }
-      for (int i = tableData.length - 1; i >= 0; --i) {
-        final row = tableData[i];
-        final rawTime = row['TIME'];
-        if (rawTime == null) {
-          continue;
-        }
-        double? timeNum;
-        if (rawTime is num) {
-          timeNum = rawTime.toDouble();
-        } else {
-          timeNum = double.tryParse(rawTime.toString());
-        }
-        if (timeNum == null) {
-          continue;
-        }
-        final timeVal = (timeNum / 1000).toString();
-        if (timeToDepth.containsKey(timeVal)) {
-          final newDepth = timeToDepth[timeVal];
-          if (newDepth != null && newDepth != row[targetCol]?.toString()) {
-            setState(() {
-              tableData[i][targetCol] = newDepth;
-              modifiedValues['${i}_$targetCol'] = newDepth;
-            });
-            // Tính lại recordIndex và frameIndex đúng như _updateParserData
-            final recordIndex = i ~/ framesPerRecord;
-            final frameIndex = i % framesPerRecord;
-            await widget.parser.updateDataValue(
-              recordIndex: recordIndex,
-              frameIndex: frameIndex,
-              columnName: targetCol,
-              newValue: double.tryParse(newDepth) ?? 0.0,
-            );
-            matchCount++;
-          }
-        } else {
-          setState(() {
-            tableData.removeAt(i);
-          });
-          widget.parser.markRowDeleted(i);
-        }
-      }
+      // Gọi xử lý chính từ parser
+      final (matchCount, errorMsg) = await widget.parser.mergeDepthFromTxt(
+        txtContent: txtFile,
+        tableData: tableData,
+        columnNames: columnNames,
+      );
       // Debug: print first 10 values and tableData length after merge
       print('tableData length after merge: ${tableData.length}');
       for (int i = 0; i < tableData.length && i < 10; i++) {
         print('Row $i: ${tableData[i]}');
+      }
+      // Gọi hàm xử lý tableData sau khi merge TXT
+      //widget.parser.normalizeTableData(tableData, columnNames);
+      setState(() {}); // Cập nhật lại UI sau khi merge
+      if (errorMsg != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorMsg), backgroundColor: Colors.red),
+        );
+        return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
