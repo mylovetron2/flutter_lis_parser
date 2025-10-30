@@ -12,6 +12,90 @@ import '../models/well_info_block.dart';
 import 'code_reader.dart';
 
 class LisFileParser {
+  /// Offset (vị trí) của EntryBlock trong file, dùng để edit/save lại
+  int entryBlockOffset = -1;
+  // Danh sách các File Header Record đã parse
+  final List<FileHeaderRecord> fileHeaderRecords = [];
+
+  /// Returns the mnemonic (column name) of the first datum in the LIS file, or empty string if not available
+  String get firstColumnName =>
+      datumBlocks.isNotEmpty ? datumBlocks.first.mnemonic : '';
+  int fileType = LisConstants.fileTypeLis;
+  String fileName = '';
+  bool isFileOpen = false;
+
+  List<BlankRecord> blankRecords = [];
+  List<LisRecord> lisRecords = [];
+  List<DatumSpecBlock> datumBlocks = [];
+  List<WellInfoBlock> consBlocks = [];
+  List<WellInfoBlock> outpBlocks = [];
+  List<WellInfoBlock> ak73Blocks = [];
+  List<WellInfoBlock> cb3Blocks = [];
+  List<WellInfoBlock> toolBlocks = [];
+  List<WellInfoBlock> chanBlocks = [];
+
+  // DataFormatSpec dataFormatSpec = DataFormatSpec(); // Đã thay bằng EntryBlock
+  EntryBlock entryBlock = EntryBlock();
+
+  // File parsing indices
+  int dataFSRIdx = -1;
+  int ak73Idx = -1;
+  int cb3Idx = -1;
+  int consIdx = -1;
+  int outpIdx = -1;
+  int toolIdx = -1;
+  int chanIdx = -1;
+
+  // Depth and data info
+  int step = 0;
+  double startDepth = 0.0;
+  double endDepth = 0.0;
+  int startDataRec = -1;
+  int endDataRec = -1;
+  int depthCurveIdx = -1;
+  double currentDepth = 0.0;
+  int currentDataRec = -1;
+
+  // Data buffers
+  late Uint8List byteData;
+  late Float32List fileData;
+
+  RandomAccessFile? file;
+
+  // Pending changes storage
+  final Map<String, Map<String, dynamic>> _pendingChanges = {};
+
+  // Get pending changes count
+  int get pendingChangesCount => _pendingChanges.length;
+
+  // Getters for UI
+  int get recordCount => lisRecords.length;
+  List<LisRecord> get records => List.unmodifiable(lisRecords);
+  List<DatumSpecBlock> get curves => List.unmodifiable(datumBlocks);
+  String get fileTypeString => fileType == LisConstants.fileTypeNti
+      ? 'NTI (Halliburton)'
+      : 'LIS (Russian)';
+
+  Map<String, dynamic> get fileInfo => {
+    'fileName': fileName.split(Platform.pathSeparator).last,
+    'fileType': fileTypeString,
+    'recordCount': recordCount,
+    'startDepth': startDepth.toStringAsFixed(2),
+    'endDepth': endDepth.toStringAsFixed(2),
+    'direction': entryBlock.nDirection,
+    'frameSpacing': entryBlock.fFrameSpacing.toStringAsFixed(3),
+    'depthUnit': entryBlock.nOpticalDepthUnit,
+  };
+
+  // Pending changes storage
+  LisFileParser() {
+    // LisFileParser constructor initialized
+    byteData = Uint8List(200000); // Increase buffer size for larger records
+    fileData = Float32List(60000);
+    // entryBlock = EntryBlock(); // EntryBlock đã khởi tạo ở trên
+    entryBlock = EntryBlock();
+  }
+
   double parseTimeToSeconds(String timeStr) {
     final parts = timeStr.split(':').map((e) => e.trim()).toList();
     double seconds = 0;
@@ -39,107 +123,111 @@ class LisFileParser {
     return seconds;
   }
 
-  Future<(int, String?)> mergeDepthFromTxt({
-    required String txtContent,
-    required List<Map<String, dynamic>> tableData,
-    required List<String> columnNames,
-  }) async {
-    try {
-      final lines = txtContent
-          .split(RegExp(r'\r?\n'))
-          .where((l) => l.trim().isNotEmpty)
-          .toList();
-      if (lines.length < 2) {
-        return (0, 'File TXT không hợp lệ!');
-      }
-      int headerIdx = -1;
-      List<String> txtHeader = [];
-      for (int i = 0; i < lines.length; ++i) {
-        final cols = lines[i]
-            .split(RegExp(r'\s+|,|;|\t'))
-            .map((e) => e.trim().toUpperCase())
-            .toList();
-        if (cols.contains('TIME') &&
-            (cols.contains('DEPTH') || cols.contains('DEPT'))) {
-          headerIdx = i;
-          txtHeader = lines[i]
-              .split(RegExp(r'\s+|,|;|\t'))
-              .map((e) => e.trim())
-              .toList();
-          break;
-        }
-      }
-      if (headerIdx == -1) {
-        return (0, 'Không tìm thấy dòng header chứa TIME và DEPTH!');
-      }
-      final timeIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'TIME');
-      int depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPTH');
-      if (depthIdx == -1) {
-        depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPT');
-      }
-      if (timeIdx == -1 || depthIdx == -1) {
-        return (0, 'File TXT thiếu cột TIME hoặc DEPTH!');
-      }
-
-      final Map<String, String> timeToDepth = {};
-      for (var i = headerIdx + 1; i < lines.length; ++i) {
-        final row = lines[i].split(RegExp(r'\s+|,|;|\t'));
-        if (row.length > depthIdx && row.length > timeIdx) {
-          final timeSec = parseTimeToSeconds(row[timeIdx]);
-          timeToDepth[timeSec.toString()] = row[depthIdx];
-        }
-      }
-      int matchCount = 0;
-      final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
-      int framesPerRecord = 1;
-      if (startDataRec >= 0 && endDataRec >= startDataRec) {
-        framesPerRecord = getFrameNum(startDataRec);
-        if (framesPerRecord <= 0) framesPerRecord = 1;
-      }
-
-      // Chuẩn hóa dữ liệu sau khi merge DEPTH
-      //normalizeTableData(tableData, columnNames);
-
-      for (int i = tableData.length - 1; i >= 0; --i) {
-        final row = tableData[i];
-        final rawTime = row['TIME'];
-        if (rawTime == null) {
-          continue;
-        }
-        double? timeNum;
-        if (rawTime is num) {
-          timeNum = rawTime.toDouble();
-        } else {
-          timeNum = double.tryParse(rawTime.toString());
-        }
-        if (timeNum == null) {
-          continue;
-        }
-        final timeVal = (timeNum / 1000).toString();
-        if (timeToDepth.containsKey(timeVal)) {
-          final newDepth = timeToDepth[timeVal];
-          if (newDepth != null && newDepth != row[targetCol]?.toString()) {
-            tableData[i][targetCol] = newDepth;
-            final recordIndex = i ~/ framesPerRecord;
-            final frameIndex = i % framesPerRecord;
-            await updateDataValue(
-              recordIndex: recordIndex,
-              frameIndex: frameIndex,
-              columnName: targetCol,
-              newValue: double.tryParse(newDepth) ?? 0.0,
-            );
-            matchCount++;
-          }
-        } else {
-          tableData.removeAt(i);
-          markRowDeleted(i);
-        }
-      }
-
-      return (matchCount, null);
-    } catch (e) {
-      return (0, 'Lỗi merge: $e');
+  /// Hàm tách phần đọc dữ liệu TXT, trả về Map TIME → DEPTH
+  Map<String, String>? parseTimeDepthMapFromTxt(String txtContent) {
+    final lines = txtContent
+        .split(RegExp(r'\r?\n'))
+        .where((l) => l.trim().isNotEmpty)
+        .toList();
+    if (lines.length < 2) {
+      return null;
     }
+    int headerIdx = -1;
+    List<String> txtHeader = [];
+    for (int i = 0; i < lines.length; ++i) {
+      final cols = lines[i]
+          .split(RegExp(r'\s+|,|;|\t'))
+          .map((e) => e.trim().toUpperCase())
+          .toList();
+      if (cols.contains('TIME') &&
+          (cols.contains('DEPTH') || cols.contains('DEPT'))) {
+        headerIdx = i;
+        txtHeader = lines[i]
+            .split(RegExp(r'\s+|,|;|\t'))
+            .map((e) => e.trim())
+            .toList();
+        break;
+      }
+    }
+    if (headerIdx == -1) {
+      return null;
+    }
+    final timeIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'TIME');
+    int depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPTH');
+    if (depthIdx == -1) {
+      depthIdx = txtHeader.indexWhere((c) => c.toUpperCase() == 'DEPT');
+    }
+    if (timeIdx == -1 || depthIdx == -1) {
+      return null;
+    }
+    final Map<String, String> timeToDepth = {};
+    for (var i = headerIdx + 1; i < lines.length; ++i) {
+      final row = lines[i].split(RegExp(r'\s+|,|;|\t'));
+      if (row.length > depthIdx && row.length > timeIdx) {
+        final timeSec = parseTimeToSeconds(row[timeIdx]);
+        timeToDepth[timeSec.toString()] = row[depthIdx];
+      }
+    }
+    return timeToDepth;
+  }
+
+  String _resolveDepthColumn(List<String> columnNames) {
+    if (columnNames.contains('DEPT')) return 'DEPT';
+    if (columnNames.contains('DEPTH')) return 'DEPTH';
+    return columnNames.length > 1
+        ? columnNames[1]
+        : (columnNames.isNotEmpty ? columnNames.first : 'DEPT');
+  }
+
+  /// Hàm merge DEPTH từ timeToDepth vào bản sao tableData, trả về tableData mới sau khi merge
+  List<Map<String, dynamic>> mergeDepthToTable({
+    required List<Map<String, dynamic>> tableData,
+    //required Map<String, String> timeToDepth,
+    required String txtContent,
+    required List<String> columnNames,
+  }) {
+    final targetCol = _resolveDepthColumn(columnNames);
+    // Tạo bản sao dữ liệu để không ảnh hưởng dữ liệu gốc
+    final newTable = List<Map<String, dynamic>>.from(
+      tableData.map((row) => Map<String, dynamic>.from(row)),
+    );
+    Map<String, String> timeToDepth =
+        parseTimeDepthMapFromTxt(txtContent) ?? <String, String>{};
+
+    for (int i = newTable.length - 1; i >= 0; --i) {
+      final row = newTable[i];
+      final rawTime = row['TIME'];
+      if (rawTime == null) {
+        continue;
+      }
+      double? timeNum;
+      if (rawTime is num) {
+        timeNum = rawTime.toDouble();
+      } else {
+        timeNum = double.tryParse(rawTime.toString());
+      }
+      if (timeNum == null) {
+        continue;
+      }
+      final timeVal = (timeNum / 1000).toString();
+      if (timeToDepth.containsKey(timeVal)) {
+        final newDepth = timeToDepth[timeVal];
+        if (newDepth != null && newDepth != row[targetCol]?.toString()) {
+          newTable[i][targetCol] = newDepth;
+        }
+      } else {
+        newTable.removeAt(i);
+      }
+    }
+    // Print the first row if available
+    if (newTable.isNotEmpty) {
+      print('[DEBUG] First row after merge: ${newTable.first}');
+    } else {
+      print('[DEBUG] tableData after merge is empty');
+    }
+    // Chuẩn hóa dữ liệu sau khi merge
+    normalizeTableData(newTable, columnNames);
+    return newTable;
   }
 
   /// Chuẩn hóa, sắp xếp, tìm step, hồi quy tuyến tính cho DEPT
@@ -150,7 +238,7 @@ class LisFileParser {
     if (data.isEmpty || data.length < 2) return;
 
     // 1. Xác định xu hướng chính (tăng hoặc giảm)
-    final deptCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
+    final deptCol = _resolveDepthColumn(columnNames);
     final deptValues = data
         .map((row) => double.tryParse(row[deptCol]?.toString() ?? '') ?? 0.0)
         .toList();
@@ -182,9 +270,7 @@ class LisFileParser {
       final curr = double.tryParse(data[i][deptCol]?.toString() ?? '') ?? 0.0;
       steps.add((curr - prev).abs());
     }
-    print(
-      '[DEBUG][normalizeTableData] Các step giữa các giá trị DEPT: ${steps.take(10).toList()}...',
-    );
+
     double mainStep = 0.0;
     if (steps.isNotEmpty) {
       final stepCounts = <double, int>{};
@@ -195,9 +281,6 @@ class LisFileParser {
       mainStep = stepCounts.entries
           .reduce((a, b) => a.value > b.value ? a : b)
           .key;
-      print(
-        '[DEBUG][normalizeTableData] Step chính (mode): $mainStep, counts: $stepCounts',
-      );
     }
 
     // 4. Ép về step chuẩn (0.1, 0.5, 1, 10, 20 ...)
@@ -205,15 +288,11 @@ class LisFileParser {
     double chosenStep = allowedSteps
         .reduce((a, b) => (mainStep - a).abs() < (mainStep - b).abs() ? a : b)
         .toDouble();
-    print('[DEBUG][normalizeTableData] Step chuẩn được chọn: $chosenStep');
 
     // 5. Làm tròn Depth đầu tiên
     double firstDepth =
         double.tryParse(data.first[deptCol]?.toString() ?? '') ?? 0.0;
     firstDepth = double.parse(firstDepth.toStringAsFixed(2));
-    print(
-      '[DEBUG][normalizeTableData] Depth đầu tiên sau làm tròn: $firstDepth',
-    );
 
     // 6. Hồi quy tuyến tính để xử lý DEPT theo step chính (in-place)
     for (int i = 0; i < data.length; i++) {
@@ -222,13 +301,79 @@ class LisFileParser {
           : firstDepth - i * chosenStep;
       data[i][deptCol] = newDepth.toStringAsFixed(3);
     }
-    print(
-      '[DEBUG][normalizeTableData] Đã hồi quy tuyến tính DEPT, ví dụ 10 dòng đầu:',
-    );
-    for (int i = 0; i < data.length && i < 10; i++) {
-      print('Row $i: ${data[i][deptCol]}');
+  }
+
+  /// Đọc dãy byte của frameData từ vị trí bắt đầu
+  Future<Uint8List> readFrameDataBytes(int offset, int length) async {
+    if (file == null) throw Exception('File chưa mở');
+    await file!.setPosition(offset);
+    return await file!.read(length);
+  }
+
+  /// Sao chép các frame từ file gốc sang file mới dựa trên tableData và Adr
+  Future<void> copyFramesToNewFile(
+    List<Map<String, dynamic>> tableData,
+    int frameLength,
+  ) async {
+    if (file == null) throw Exception('File chưa mở');
+    // Tạo tên file mới với phần mở rộng ngày giờ
+    final now = DateTime.now();
+    final extIndex = fileName.lastIndexOf('.');
+    final timeStr =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+    final newFileName = extIndex > 0
+        ? '${fileName.substring(0, extIndex)}_copy_$timeStr${fileName.substring(extIndex)}'
+        : '${fileName}_copy_$timeStr';
+    final newFile = await File(newFileName).open(mode: FileMode.write);
+
+    for (final row in tableData) {
+      final adr = row['Adr'];
+      if (adr == null) continue;
+      // Adr dạng 'recordIdx:frame', cần tính offset thực tế
+      final parts = adr.toString().split(':');
+      if (parts.length != 2) continue;
+      final recordIdx = int.tryParse(parts[0]) ?? 0;
+      final frameIdx = int.tryParse(parts[1]) ?? 0;
+      // Tính offset thực tế của frame
+      final offset = calcFrameOffset(
+        recordIdx,
+        frameIdx,
+        frameLength,
+      ); // Hàm này cần có logic đúng
+      await file!.setPosition(offset);
+      final frameBytes = await file!.read(frameLength);
+      await newFile.setPosition(offset);
+      await newFile.writeFrom(frameBytes);
     }
-    // Ghi chú: Các bước xử lý gồm xác định xu hướng, sắp xếp, tìm step, ép về step, làm tròn depth đầu, hồi quy tuyến tính
+    await newFile.close();
+    print('Đã copy xong các frame sang file mới: $newFileName');
+  }
+
+  /// Hàm tính offset thực tế của frame (cần chỉnh lại cho đúng cấu trúc file LIS)
+  int calcFrameOffset(int recordIdx, int frameIdx, int frameLength) {
+    // Ví dụ: mỗi record chứa nhiều frame, offset = addr_record + 2 + frameIdx * frameLength
+    if (recordIdx < 0 || recordIdx >= lisRecords.length) return 0;
+    final record = lisRecords[recordIdx];
+    return record.addr + 2 + frameIdx * frameLength;
+  }
+
+  Future<(int, String?)> saveTableData2Lis({
+    required String txtContent,
+    required List<Map<String, dynamic>> tableData,
+    required List<String> columnNames,
+    int? startDataRec,
+    int? endDataRec,
+  }) async {
+    // Parse time-depth mapping from TXT content
+    final timeToDepth = parseTimeDepthMapFromTxt(txtContent);
+    if (timeToDepth == null) {
+      return (0, 'Không thể parse TIME/DEPTH từ TXT content');
+    }
+
+    // Normalize the merged data
+
+    // Copy frames to new file using merged data
+    return (0, null);
   }
 
   /// Ghi giá trị Depth vào tất cả các data record (type 0), mỗi record giảm dần 0.5
@@ -265,233 +410,6 @@ class LisFileParser {
       'Đã ghi giá trị Depth vào tất cả data record, file mới: $newFileName',
     );
   }
-
-  /// Ghi tableData ra file LIS mới, tự động tạo tên file mới dựa trên file gốc và thời gian
-  Future<bool> saveTableDataToNewFileAuto(
-    List<Map<String, dynamic>> tableData,
-  ) async {
-    if (file == null || tableData.isEmpty) {
-      print('[DEBUG][SAVE] file is null hoặc tableData rỗng');
-      return false;
-    }
-
-    normalizeTableData(tableData, getColumnNames());
-
-    // Đọc toàn bộ file gốc vào buffer
-    final originalFile = File(fileName);
-    final originalBytes = await originalFile.readAsBytes();
-    // Tạo tên file mới
-    final now = DateTime.now();
-    final baseName = fileName.split(Platform.pathSeparator).last;
-    final dirName = fileName.substring(
-      0,
-      fileName.lastIndexOf(Platform.pathSeparator),
-    );
-    final extIdx = baseName.lastIndexOf('.');
-    final namePart = extIdx > 0 ? baseName.substring(0, extIdx) : baseName;
-    final extPart = extIdx > 0 ? baseName.substring(extIdx) : '.LIS';
-    final timeStr =
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
-    final newFileName =
-        '$dirName${Platform.pathSeparator}${namePart}_saved_$timeStr$extPart';
-    // Lấy danh sách các record type 0
-    final dataRecords = lisRecords.where((r) => r.type == 0).toList();
-    if (dataRecords.isEmpty) {
-      print('[DEBUG][SAVE] Không tìm thấy dataRecords type 0');
-      return false;
-    }
-    // Tính số frame cho mỗi record
-    int totalFrames = 0;
-    final framesPerRecord = <int>[];
-    for (int i = 0; i < dataRecords.length; i++) {
-      final frameNum = getFrameNum(startDataRec + i);
-      if (i == 0) {
-        print('[DEBUG][SAVE] Frame num record 0: $frameNum');
-      }
-      framesPerRecord.add(frameNum);
-      totalFrames += frameNum;
-    }
-    print(
-      '[DEBUG][SAVE] Tổng số frame: $totalFrames, tableData.length=${tableData.length}, dataRecords.length=${dataRecords.length}',
-    );
-    if (tableData.length != totalFrames) {
-      print(
-        '[DEBUG][SAVE][CẢNH BÁO] tableData.length (${tableData.length}) != tổng số frame ($totalFrames)',
-      );
-    }
-    int rowIdx = 0;
-    for (int recIdx = 0; recIdx < dataRecords.length; recIdx++) {
-      final record = dataRecords[recIdx];
-      final frameNum = framesPerRecord[recIdx];
-      final recordBytes = <int>[];
-      //Xử lý Ghi 4 byte Depth đầu tiên (dùng entryBlock.nDepthRepr)
-      // 1. Ghi 4 byte Depth đầu tiên (dùng entryBlock.nDepthRepr)
-      /*
-        final depthValue = row['DEPTH'];
-        final depthRepr = entryBlock.nDepthRepr;
-        final depthSize = CodeReader.getCodeSize(depthRepr);
-        try {
-          if (depthValue == null ||
-              (depthValue is String && depthValue == 'NULL')) {
-            recordBytes.addAll(
-              CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
-            );
-          } else if (depthValue is num) {
-            recordBytes.addAll(
-              CodeReader.encode32BitFloat(depthValue.toDouble()),
-            );
-          } else if (depthValue is String) {
-            final parsed = double.tryParse(depthValue);
-            if (parsed != null) {
-              recordBytes.addAll(CodeReader.encode32BitFloat(parsed));
-            } else {
-              recordBytes.addAll(
-                CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
-              );
-            }
-          } else {
-            recordBytes.addAll(
-              CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
-            );
-          }
-        } catch (e) {
-          recordBytes.addAll(
-            CodeReader.encode32BitFloat(entryBlock.fAbsentValue),
-          );
-        }*/
-      // 2. Ghi các frameData
-      for (int frame = 0; frame < frameNum; frame++) {
-        if (rowIdx >= tableData.length) {
-          print('[DEBUG][SAVE][CẢNH BÁO] rowIdx vượt quá tableData.length');
-          break;
-        }
-        final row = tableData[rowIdx];
-        // Ghi các trường dữ liệu cho từng frame
-        for (final col in getColumnNames()) {
-          if (col == 'DEPTH') continue; // DEPTH đã được ghi riêng
-          final value = row[col];
-          final datum = datumBlocks.firstWhere(
-            (d) => d.mnemonic == col,
-            orElse: () => DatumSpecBlock.empty(col),
-          );
-          final reprCode = datum.reprCode;
-          final size = datum.size;
-
-          try {
-            // Xử lý trường kiểu mảng (array)
-            if (value is Map &&
-                value['isArray'] == true &&
-                value['data'] is List) {
-              final codeSize = CodeReader.getCodeSize(reprCode);
-              final arr = value['data'] as List;
-              final numElements = size ~/ codeSize;
-              print(
-                '[DEBUG][SAVE][ARRAY] col=$col reprCode=$reprCode size=$size codeSize=$codeSize numElements=$numElements',
-              );
-              for (int i = 0; i < numElements; i++) {
-                final element = (i < arr.length && arr[i] != null)
-                    ? arr[i]
-                    : entryBlock.fAbsentValue;
-                final encoded = CodeReader.encode(
-                  element is num ? element : entryBlock.fAbsentValue,
-                  reprCode,
-                  codeSize,
-                );
-                recordBytes.addAll(encoded);
-              }
-              continue;
-            }
-
-            // Xử lý giá trị null hoặc 'NULL'
-            if (value == null || (value is String && value == 'NULL')) {
-              final encoded = CodeReader.encode(
-                entryBlock.fAbsentValue,
-                reprCode,
-                CodeReader.getCodeSize(reprCode),
-              );
-              recordBytes.addAll(encoded);
-              continue;
-            }
-
-            // Xử lý giá trị kiểu số
-            if (value is num) {
-              final encoded = CodeReader.encode(
-                value,
-                reprCode,
-                CodeReader.getCodeSize(reprCode),
-              );
-              recordBytes.addAll(encoded);
-              continue;
-            }
-
-            // Xử lý giá trị kiểu chuỗi
-            if (value is String) {
-              final parsed = double.tryParse(value);
-              if (parsed != null) {
-                // Chuỗi là số, encode như số
-                final encoded = CodeReader.encode(
-                  parsed,
-                  reprCode,
-                  CodeReader.getCodeSize(reprCode),
-                );
-                recordBytes.addAll(encoded);
-                continue;
-              } else if (reprCode == 65) {
-                // Chuỗi không phải số, encode dạng ASCII nếu reprCode là 65
-                final encoded = CodeReader.encode(value, reprCode, size);
-                recordBytes.addAll(encoded);
-                continue;
-              }
-            }
-
-            // Nếu không khớp bất kỳ trường hợp nào, ghi absent value
-            final encoded = CodeReader.encode(
-              entryBlock.fAbsentValue,
-              reprCode,
-              CodeReader.getCodeSize(reprCode),
-            );
-            recordBytes.addAll(encoded);
-          } catch (e) {
-            // Nếu có lỗi khi encode, ghi absent value
-            recordBytes.addAll(
-              CodeReader.encode(
-                entryBlock.fAbsentValue,
-                reprCode,
-                CodeReader.getCodeSize(reprCode),
-              ),
-            );
-          }
-        }
-        rowIdx++;
-      }
-
-      // Ghi recordBytes vào buffer gốc
-      final start = record.addr + 2 + 4;
-      final end = start + recordBytes.length;
-      if (recIdx == 1) {
-        print('RecordLength=${recordBytes.length}, start=$start, end=$end');
-        print(
-          'FirstRecordBytes=${recordBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).take(50).join(' ')}',
-        );
-      }
-      if (end <= originalBytes.length) {
-        for (int i = 0; i < recordBytes.length; i++) {
-          originalBytes[start + i] = recordBytes[i];
-        }
-      } else {
-        print(
-          '[DEBUG][SAVE][CẢNH BÁO] Không đủ dung lượng để ghi recordBytes vào file gốc',
-        );
-      }
-    }
-    // Ghi ra file mới
-    await File(newFileName).writeAsBytes(originalBytes);
-    print(
-      '[DEBUG][SAVE] Đã ghi xong tất cả dataRecords và frame vào file mới: $newFileName',
-    );
-    return true;
-  }
-  // LIS File Parser - converted from CLisFile C++ class
 
   /// Lưu tableData vào các data record (type 0), tự động xử lý nhiều frame/record
   Future<bool> saveTableDataToRecords(
@@ -788,66 +706,6 @@ class LisFileParser {
     // Kết thúc EntryBlock
     bytes.add(0); // entryType = 0 (end)
     return Uint8List.fromList(bytes);
-  }
-
-  /// Offset (vị trí) của EntryBlock trong file, dùng để edit/save lại
-  int entryBlockOffset = -1;
-  // Danh sách các File Header Record đã parse
-  final List<FileHeaderRecord> fileHeaderRecords = [];
-
-  /// Returns the mnemonic (column name) of the first datum in the LIS file, or empty string if not available
-  String get firstColumnName =>
-      datumBlocks.isNotEmpty ? datumBlocks.first.mnemonic : '';
-  int fileType = LisConstants.fileTypeLis;
-  String fileName = '';
-  bool isFileOpen = false;
-
-  List<BlankRecord> blankRecords = [];
-  List<LisRecord> lisRecords = [];
-  List<DatumSpecBlock> datumBlocks = [];
-  List<WellInfoBlock> consBlocks = [];
-  List<WellInfoBlock> outpBlocks = [];
-  List<WellInfoBlock> ak73Blocks = [];
-  List<WellInfoBlock> cb3Blocks = [];
-  List<WellInfoBlock> toolBlocks = [];
-  List<WellInfoBlock> chanBlocks = [];
-
-  // DataFormatSpec dataFormatSpec = DataFormatSpec(); // Đã thay bằng EntryBlock
-  EntryBlock entryBlock = EntryBlock();
-
-  // File parsing indices
-  int dataFSRIdx = -1;
-  int ak73Idx = -1;
-  int cb3Idx = -1;
-  int consIdx = -1;
-  int outpIdx = -1;
-  int toolIdx = -1;
-  int chanIdx = -1;
-
-  // Depth and data info
-  int step = 0;
-  double startDepth = 0.0;
-  double endDepth = 0.0;
-  int startDataRec = -1;
-  int endDataRec = -1;
-  int depthCurveIdx = -1;
-  double currentDepth = 0.0;
-  int currentDataRec = -1;
-
-  // Data buffers
-  late Uint8List byteData;
-  late Float32List fileData;
-
-  RandomAccessFile? file;
-
-  // Pending changes storage
-
-  LisFileParser() {
-    // LisFileParser constructor initialized
-    byteData = Uint8List(200000); // Increase buffer size for larger records
-    fileData = Float32List(60000);
-    // entryBlock = EntryBlock(); // EntryBlock đã khởi tạo ở trên
-    entryBlock = EntryBlock();
   }
 
   // Track deleted rows as pending changes
@@ -1697,25 +1555,6 @@ class LisFileParser {
     isFileOpen = false;
   }
 
-  // Getters for UI
-  int get recordCount => lisRecords.length;
-  List<LisRecord> get records => List.unmodifiable(lisRecords);
-  List<DatumSpecBlock> get curves => List.unmodifiable(datumBlocks);
-  String get fileTypeString => fileType == LisConstants.fileTypeNti
-      ? 'NTI (Halliburton)'
-      : 'LIS (Russian)';
-
-  Map<String, dynamic> get fileInfo => {
-    'fileName': fileName.split(Platform.pathSeparator).last,
-    'fileType': fileTypeString,
-    'recordCount': recordCount,
-    'startDepth': startDepth.toStringAsFixed(2),
-    'endDepth': endDepth.toStringAsFixed(2),
-    'direction': entryBlock.nDirection,
-    'frameSpacing': entryBlock.fFrameSpacing.toStringAsFixed(3),
-    'depthUnit': entryBlock.nOpticalDepthUnit,
-  };
-
   // ==================== DATA READING METHODS ====================
 
   // Get all data for a specific data record (converted from C++ GetAllData)
@@ -2274,6 +2113,8 @@ class LisFileParser {
             }
           }
 
+          // Thêm cột Adr lưu vị trí frame dữ liệu đọc được (recordIdx:frame)
+          row['Adr'] = '${recordIdx}:${frame}';
           tableData.add(row);
           rowCount++;
         }
@@ -2400,12 +2241,6 @@ class LisFileParser {
       return false;
     }
   }
-
-  // Pending changes storage
-  final Map<String, Map<String, dynamic>> _pendingChanges = {};
-
-  // Get pending changes count
-  int get pendingChangesCount => _pendingChanges.length;
 
   // Clear all pending changes
   void clearPendingChanges() {

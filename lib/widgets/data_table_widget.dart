@@ -40,15 +40,22 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
   // Merge theo TIME: thay DEPTH trong LIS bằng DEPTH trong TXT
   Future<void> _mergeByTimeFromTxt() async {
-    // Cập nhật lại modifiedValues cho các cell DEPTH đã thay đổi
-    final targetCol = columnNames.length > 1 ? columnNames[1] : 'DEPT';
-    modifiedValues.clear();
-    for (int i = 0; i < tableData.length; i++) {
-      final value = tableData[i][targetCol];
-      if (value != null) {
-        modifiedValues['${i}_$targetCol'] = value.toString();
-      }
+    // Xác định cột độ sâu mục tiêu để merge
+    String targetCol;
+    if (columnNames.contains('DEPT')) {
+      targetCol = 'DEPT';
+    } else if (columnNames.contains('DEPTH')) {
+      targetCol = 'DEPTH';
+    } else {
+      targetCol = columnNames.length > 1
+          ? columnNames[1]
+          : (columnNames.isNotEmpty ? columnNames.first : 'DEPT');
     }
+    // Sẽ cập nhật modifiedValues dựa trên diff SAU khi merge xong
+    final originalTable = List<Map<String, dynamic>>.from(
+      tableData.map((row) => Map<String, dynamic>.from(row)),
+    );
+    modifiedValues.clear();
     try {
       // Chọn file TXT bằng file picker
       FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -60,26 +67,38 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       if (txtPath == null) return;
       final txtFile = await File(txtPath).readAsString();
 
-      // Gọi xử lý chính từ parser
-      final (matchCount, errorMsg) = await widget.parser.mergeDepthFromTxt(
+      final merged = widget.parser.mergeDepthToTable(
         txtContent: txtFile,
         tableData: tableData,
         columnNames: columnNames,
       );
-      // Debug: print first 10 values and tableData length after merge
-      print('tableData length after merge: ${tableData.length}');
-      for (int i = 0; i < tableData.length && i < 10; i++) {
-        print('Row $i: ${tableData[i]}');
+      int matchCount = merged.length; // Số dòng còn lại sau merge
+
+      // Tính diff giữa originalTable và merged cho cột targetCol
+      final int limit = merged.length < originalTable.length
+          ? merged.length
+          : originalTable.length;
+      for (int i = 0; i < limit; i++) {
+        final oldVal = originalTable[i][targetCol]?.toString();
+        final newVal = merged[i][targetCol]?.toString();
+        if (oldVal != newVal && newVal != null && newVal != 'NULL') {
+          modifiedValues['${i}_$targetCol'] = newVal;
+          final parsed = double.tryParse(newVal);
+          if (parsed != null) {
+            // Đưa vào pending changes của parser để có thể Save
+            await _updateParserData(i, targetCol, parsed);
+          }
+        }
       }
-      // Gọi hàm xử lý tableData sau khi merge TXT
-      //widget.parser.normalizeTableData(tableData, columnNames);
-      setState(() {}); // Cập nhật lại UI sau khi merge
-      if (errorMsg != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(errorMsg), backgroundColor: Colors.red),
-        );
-        return;
-      }
+      setState(() {
+        // Cập nhật lại bảng dữ liệu sau khi merge
+        tableData = merged;
+        currentPage = 0; // quay về trang đầu để dễ thấy thay đổi
+        // Clear editing state after merge
+        editingCellKey = null;
+        editControllers.clear();
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
