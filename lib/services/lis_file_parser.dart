@@ -326,25 +326,54 @@ class LisFileParser {
         : '${fileName}_copy_$timeStr';
     final newFile = await File(newFileName).open(mode: FileMode.write);
 
-    for (final row in tableData) {
-      final adr = row['Adr'];
-      if (adr == null) continue;
-      // Adr dạng 'recordIdx:frame', cần tính offset thực tế
-      final parts = adr.toString().split(':');
-      if (parts.length != 2) continue;
-      final recordIdx = int.tryParse(parts[0]) ?? 0;
-      final frameIdx = int.tryParse(parts[1]) ?? 0;
-      // Tính offset thực tế của frame
-      final offset = calcFrameOffset(
-        recordIdx,
-        frameIdx,
-        frameLength,
-      ); // Hàm này cần có logic đúng
-      await file!.setPosition(offset);
-      final frameBytes = await file!.read(frameLength);
-      await newFile.setPosition(offset);
-      await newFile.writeFrom(frameBytes);
+    try {
+      // Copy the entire original file to new file first
+      await file!.setPosition(0);
+      final originalBytes = await file!.read(await file!.length());
+      await newFile.writeFrom(originalBytes);
+    } catch (e) {
+      print('Error copying original file: $e');
+      await newFile.close();
+      return;
     }
+
+    //Iterate through all data records (type 0) to copy their frames
+    int step = 0;
+    for (int i = startDataRec; i <= endDataRec; i++) {
+      final record = lisRecords[i];
+      if (record.type != 0) continue;
+
+      final frameNum = getFrameNum(i);
+      int addrFileNew = record.addr + 6;
+      // Copy each frame in this record
+      for (int frameIdx = 0; frameIdx < frameNum; frameIdx++) {
+        if (step >= tableData.length) break;
+        final adr = tableData[step]['Adr'];
+        if (adr == null) {
+          step++;
+          continue;
+        }
+        // Adr dạng 'recordIdx:frame', cần tính offset thực tế
+        final parts = adr.toString().split(':');
+        if (parts.length != 2) {
+          step++;
+          continue;
+        }
+        final recordIdx = int.tryParse(parts[0]) ?? 0;
+        final frameIdx = int.tryParse(parts[1]) ?? 0;
+        // Tính offset thực tế của frame
+        final offset = calcFrameOffset(recordIdx, frameIdx, frameLength);
+        await file!.setPosition(offset);
+        final frameBytes = await file!.read(frameLength);
+
+        // Write frame to new file at the same position
+        await newFile.setPosition(addrFileNew);
+        await newFile.writeFrom(frameBytes);
+        addrFileNew = addrFileNew + frameLength;
+        step++;
+      }
+    }
+
     await newFile.close();
     print('Đã copy xong các frame sang file mới: $newFileName');
   }
@@ -354,7 +383,10 @@ class LisFileParser {
     // Ví dụ: mỗi record chứa nhiều frame, offset = addr_record + 2 + frameIdx * frameLength
     if (recordIdx < 0 || recordIdx >= lisRecords.length) return 0;
     final record = lisRecords[recordIdx];
-    return record.addr + 2 + frameIdx * frameLength;
+    // print(
+    //   '[DEBUG][calcFrameOffset] Adr=${record.addr + 6 + frameIdx * frameLength}',
+    // );
+    return record.addr + 6 + frameIdx * frameLength;
   }
 
   Future<(int, String?)> saveTableData2Lis({
@@ -2114,7 +2146,7 @@ class LisFileParser {
           }
 
           // Thêm cột Adr lưu vị trí frame dữ liệu đọc được (recordIdx:frame)
-          row['Adr'] = '${recordIdx}:${frame}';
+          row['Adr'] = '$recordIdx:$frame';
           tableData.add(row);
           rowCount++;
         }

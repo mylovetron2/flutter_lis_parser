@@ -41,20 +41,7 @@ class _DataTableWidgetState extends State<DataTableWidget> {
   // Merge theo TIME: thay DEPTH trong LIS bằng DEPTH trong TXT
   Future<void> _mergeByTimeFromTxt() async {
     // Xác định cột độ sâu mục tiêu để merge
-    String targetCol;
-    if (columnNames.contains('DEPT')) {
-      targetCol = 'DEPT';
-    } else if (columnNames.contains('DEPTH')) {
-      targetCol = 'DEPTH';
-    } else {
-      targetCol = columnNames.length > 1
-          ? columnNames[1]
-          : (columnNames.isNotEmpty ? columnNames.first : 'DEPT');
-    }
-    // Sẽ cập nhật modifiedValues dựa trên diff SAU khi merge xong
-    final originalTable = List<Map<String, dynamic>>.from(
-      tableData.map((row) => Map<String, dynamic>.from(row)),
-    );
+    // Không cần xác định targetCol hay originalTable nữa
     modifiedValues.clear();
     try {
       // Chọn file TXT bằng file picker
@@ -74,22 +61,15 @@ class _DataTableWidgetState extends State<DataTableWidget> {
       );
       int matchCount = merged.length; // Số dòng còn lại sau merge
 
-      // Tính diff giữa originalTable và merged cho cột targetCol
-      final int limit = merged.length < originalTable.length
-          ? merged.length
-          : originalTable.length;
-      for (int i = 0; i < limit; i++) {
-        final oldVal = originalTable[i][targetCol]?.toString();
-        final newVal = merged[i][targetCol]?.toString();
-        if (oldVal != newVal && newVal != null && newVal != 'NULL') {
-          modifiedValues['${i}_$targetCol'] = newVal;
-          final parsed = double.tryParse(newVal);
-          if (parsed != null) {
-            // Đưa vào pending changes của parser để có thể Save
-            await _updateParserData(i, targetCol, parsed);
-          }
-        }
-      }
+      // Thay thế diff bằng copyFramesToNewFile: copy các frame từ merged sang file mới
+      final frameLength = widget.parser.entryBlock.nDataFrameSize;
+      await widget.parser.copyFramesToNewFile(merged, frameLength);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Đã copy các frame sang file mới!'),
+          backgroundColor: Colors.green,
+        ),
+      );
       setState(() {
         // Cập nhật lại bảng dữ liệu sau khi merge
         tableData = merged;
