@@ -55,7 +55,8 @@ class LisFileParser {
   int depthCurveIdx = -1;
   double currentDepth = 0.0;
   int currentDataRec = -1;
-
+  double firstDepth = 0.0;
+  double stepChuanHoan = 0.0;
   // Data buffers
   late Uint8List byteData;
   late Float32List fileData;
@@ -288,10 +289,9 @@ class LisFileParser {
     double chosenStep = allowedSteps
         .reduce((a, b) => (mainStep - a).abs() < (mainStep - b).abs() ? a : b)
         .toDouble();
-
+    stepChuanHoan = chosenStep;
     // 5. Làm tròn Depth đầu tiên
-    double firstDepth =
-        double.tryParse(data.first[deptCol]?.toString() ?? '') ?? 0.0;
+    firstDepth = double.tryParse(data.first[deptCol]?.toString() ?? '') ?? 0.0;
     firstDepth = double.parse(firstDepth.toStringAsFixed(2));
 
     // 6. Hồi quy tuyến tính để xử lý DEPT theo step chính (in-place)
@@ -339,12 +339,25 @@ class LisFileParser {
 
     //Iterate through all data records (type 0) to copy their frames
     int step = 0;
+    final value = tableData[0]['DEPT'];
+    double depthRecord = value is double
+        ? value
+        : double.tryParse(value.toString()) ?? 0.0;
+    depthRecord = depthRecord * 100;
     for (int i = startDataRec; i <= endDataRec; i++) {
       final record = lisRecords[i];
-      if (record.type != 0) continue;
-
+      if (record.type != 0) continue; //Chỉ duyệt record data type 0
+      int addrFileNew = record.addr + 2;
+      final depthBytes = CodeReader.encode(
+        depthRecord,
+        entryBlock.nDepthRepr,
+        4,
+      );
+      await newFile.setPosition(addrFileNew);
+      await newFile.writeFrom(depthBytes);
+      depthRecord = depthRecord - stepChuanHoan * 100;
       final frameNum = getFrameNum(i);
-      int addrFileNew = record.addr + 6;
+      addrFileNew = record.addr + 6;
       // Copy each frame in this record
       for (int frameIdx = 0; frameIdx < frameNum; frameIdx++) {
         if (step >= tableData.length) break;
@@ -365,6 +378,36 @@ class LisFileParser {
         final offset = calcFrameOffset(recordIdx, frameIdx, frameLength);
         await file!.setPosition(offset);
         final frameBytes = await file!.read(frameLength);
+
+        // Lấy dữ liệu cột thứ 2 (DEPT) từ tableData[step]
+        final deptValue = tableData[step]['DEPT'];
+        if (deptValue != null) {
+          // Tìm datum cho cột DEPT
+          final deptDatum = datumBlocks.firstWhere(
+            (d) => d.mnemonic == 'DEPT',
+            orElse: () => DatumSpecBlock.empty('DEPT'),
+          );
+
+          // Chuyển đổi giá trị thành double
+          double deptDouble = 0.0;
+          if (deptValue is num) {
+            deptDouble = deptValue.toDouble();
+          } else if (deptValue is String && deptValue != 'NULL') {
+            deptDouble = double.tryParse(deptValue) ?? 0.0;
+          }
+
+          // Mã hóa theo reprCode của cột DEPT
+          final deptBytes = CodeReader.encode(
+            deptDouble,
+            deptDatum.reprCode,
+            4, // 4 bytes
+          );
+
+          // Gán vào 4 byte đầu tiên của frameBytes
+          for (int i = 0; i < 4 && i < deptBytes.length; i++) {
+            frameBytes[i] = deptBytes[i];
+          }
+        }
 
         // Write frame to new file at the same position
         await newFile.setPosition(addrFileNew);
