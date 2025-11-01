@@ -63,7 +63,12 @@ class _DataTableWidgetState extends State<DataTableWidget> {
 
       // Thay thế diff bằng copyFramesToNewFile: copy các frame từ merged sang file mới
       final frameLength = widget.parser.entryBlock.nDataFrameSize;
-      await widget.parser.copyFramesToNewFile(merged, frameLength);
+      //await widget.parser.copyFramesToNewFile(merged, frameLength);
+      await widget.parser.saveTableData2Lis(
+        tableData: merged, // List<Map<String, dynamic>> dữ liệu bảng
+        columnNames: columnNames, // List<String> tên cột
+        startAdrSave: 30381,
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Đã copy các frame sang file mới!'),

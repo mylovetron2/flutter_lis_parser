@@ -512,11 +512,11 @@ class CodeReader {
 
   static _encodeRussianLisFloat(double value) {
     // Custom encoding algorithm matching C++ ReadCode logic
-    print('DEBUG ENCODE: input value=$value');
+    //print('DEBUG ENCODE: input value=$value');
 
     if (value == 0.0) {
       final result = Uint8List.fromList([0, 0, 0, 0]);
-      print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
+      //print('DEBUG ENCODE: zero -> bytes=[${result.join(', ')}]');
       return result;
     }
 
@@ -572,9 +572,9 @@ class CodeReader {
     int ch3 = result & 0xFF;
 
     final encoded = Uint8List.fromList([ch0, ch1, ch2, ch3]);
-    print(
-      'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
-    );
+    // print(
+    //   'DEBUG ENCODE: value=$value, isNeg=$isNegative, exp=$exponentBits, mantissa=0x${mantissaBits.toRadixString(16).padLeft(6, '0')} -> bytes=[${encoded.join(', ')}]',
+    // );
     return encoded;
   }
 }

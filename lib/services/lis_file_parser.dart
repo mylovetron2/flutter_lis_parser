@@ -62,6 +62,7 @@ class LisFileParser {
   late Float32List fileData;
 
   RandomAccessFile? file;
+  int maxFramesPerRecord = 20;
 
   // Pending changes storage
   final Map<String, Map<String, dynamic>> _pendingChanges = {};
@@ -262,6 +263,11 @@ class LisFileParser {
     print(
       '[DEBUG][normalizeTableData] Dữ liệu đã sắp xếp theo xu hướng $deptCol. Giá trị đầu: ${data.first[deptCol]}, cuối: ${data.last[deptCol]}',
     );
+    if (data.isNotEmpty) {
+      print(
+        '[DEBUG][normalizeTableData] First row after normalize: ${data.first}',
+      );
+    }
 
     // 3. Tìm xu hướng step chính
     final steps = <double>[];
@@ -432,23 +438,161 @@ class LisFileParser {
     return record.addr + 6 + frameIdx * frameLength;
   }
 
-  Future<(int, String?)> saveTableData2Lis({
-    required String txtContent,
+  Future<void> saveTableData2Lis({
     required List<Map<String, dynamic>> tableData,
     required List<String> columnNames,
-    int? startDataRec,
-    int? endDataRec,
+    required int startAdrSave,
   }) async {
-    // Parse time-depth mapping from TXT content
-    final timeToDepth = parseTimeDepthMapFromTxt(txtContent);
-    if (timeToDepth == null) {
-      return (0, 'Không thể parse TIME/DEPTH từ TXT content');
+    if (file == null) throw Exception('File chưa mở');
+    // Tạo tên file mới với phần mở rộng ngày giờ
+    final now = DateTime.now();
+    final extIndex = fileName.lastIndexOf('.');
+    final timeStr =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
+    final newFileName = extIndex > 0
+        ? '${fileName.substring(0, extIndex)}_copy_$timeStr${fileName.substring(extIndex)}'
+        : '${fileName}_copy_$timeStr';
+    final newFile = await File(newFileName).open(mode: FileMode.write);
+
+    try {
+      await file!.setPosition(0);
+      final originalBytes = await file!.read(startAdrSave.toInt());
+      await newFile.writeFrom(originalBytes);
+    } catch (e) {
+      print('Error copying original file: $e');
+      //await newFile.close();
+      return;
     }
 
-    // Normalize the merged data
+    //Tính tổng byte cần ghi từ tableData dựa vào length và frameLength
+    int totalBytesToWrite = tableData.length * entryBlock.nDataFrameSize;
 
-    // Copy frames to new file using merged data
-    return (0, null);
+    //Tính frame per record
+    int framePerRecordNew = 1;
+    for (int i = maxFramesPerRecord; i >= 1; i--) {
+      if ((totalBytesToWrite / entryBlock.nDataFrameSize) % i == 0) {
+        framePerRecordNew = i;
+        break;
+      }
+    }
+
+    //Tính numRec
+    int numRec =
+        (totalBytesToWrite / (framePerRecordNew * entryBlock.nDataFrameSize))
+            .ceil();
+    int preAdr, nextAdr;
+
+    //Đọc 4byte từ file gốc tại startAdrSave để lấy preAdr
+    //Di chuyển đầu đọc tới vị trí startAdrSave+4
+    if (startAdrSave == null) {
+      throw Exception('startAdrSave cannot be null');
+    }
+    await file!.setPosition(startAdrSave + 4);
+    final preAdrBytes = await file!.read(4);
+    preAdr = ByteData.sublistView(preAdrBytes).getInt32(0, Endian.little);
+    nextAdr = preAdr + framePerRecordNew * entryBlock.nDataFrameSize;
+
+    print('[DEBUG] totalBytesToWrite: $totalBytesToWrite');
+    print('[DEBUG] framePerRecordNew: $framePerRecordNew');
+    print('[DEBUG] preAdr: $preAdr');
+    print('[DEBUG] nextAdr: $nextAdr');
+    print('[DEBUG] numRec: $numRec');
+    print('[DEBUG] length per record: ${entryBlock.nDataFrameSize}');
+
+    //Tính Depth record
+    //double depthRecord = tableData[0]['DEPT'] * 100;
+
+    double depthRecord = 0.0;
+    var val = tableData.isNotEmpty ? tableData[0]['DEPT'] : null;
+    if (val is num) {
+      depthRecord = val.toDouble();
+    } else if (val is String && val != 'NULL') {
+      depthRecord = double.tryParse(val) ?? 0.0;
+    }
+
+    int step = 0;
+    //Duyệt qua các row trong numRec
+    for (int i = 0; i < numRec; i++) {
+      //Ghi 16 byte blank record header
+      //Ghi 4 byte 0
+      final headerBytes = ByteData(4)..setInt32(0, 0, Endian.little);
+      await newFile.writeFrom(headerBytes.buffer.asUint8List());
+
+      //Ghi preAdr
+      final preAdrBytes = ByteData(4)..setInt32(0, preAdr, Endian.little);
+      await newFile.writeFrom(preAdrBytes.buffer.asUint8List());
+      //Ghi nextAdr
+      final nextAdrBytes = ByteData(4)..setInt32(0, nextAdr, Endian.little);
+      await newFile.writeFrom(nextAdrBytes.buffer.asUint8List());
+      //Ghi length Record
+      int lengthNew = framePerRecordNew * entryBlock.nDataFrameSize + 4;
+      final lengthBytes = ByteData(2)..setInt16(0, lengthNew, Endian.big);
+      await newFile.writeFrom(lengthBytes.buffer.asUint8List());
+      //Ghi 2 byte 0
+      final zeroBytes = ByteData(2)..setInt16(0, 0, Endian.big);
+      await newFile.writeFrom(zeroBytes.buffer.asUint8List());
+
+      //Ghi 2 byte header record type = 0
+      final typeBytes = ByteData(2)..setInt16(0, 0, Endian.big);
+      await newFile.writeFrom(typeBytes.buffer.asUint8List());
+
+      //Ghi 4 byte Depth record
+      final depthBytes = CodeReader.encode(
+        depthRecord,
+        entryBlock.nDepthRepr,
+        4,
+      );
+      await newFile.writeFrom(depthBytes);
+
+      depthRecord -=
+          stepChuanHoan * 100; //Giảm depth record theo step chuẩn hóa
+
+      print('lengthNew: $lengthNew');
+      print(
+        'lengthBytes: ${lengthBytes.buffer.asUint8List().map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
+
+      for (int i = 0; i < framePerRecordNew; i++) {
+        if (step >= tableData.length) {
+          //Ghi absent value cho các frame còn lại
+          final absentValue = entryBlock.fAbsentValue;
+          final absentBytes = CodeReader.encode32BitFloat(absentValue);
+          for (int j = 0; j < entryBlock.nDataFrameSize; j += 4) {
+            await newFile.writeFrom(absentBytes);
+          }
+          continue;
+        }
+        final row = tableData[step];
+        //Ghi từng cột theo thứ tự trong columnNames
+        for (final col in columnNames) {
+          final value = row[col];
+          final datum = datumBlocks.firstWhere(
+            (d) => d.mnemonic == col,
+            orElse: () => DatumSpecBlock.empty(col),
+          );
+          final reprCode = datum.reprCode;
+          final size = datum.size;
+          double valDouble = 0.0;
+          if (value is num) {
+            valDouble = value.toDouble();
+          } else if (value is String && value != 'NULL') {
+            valDouble = double.tryParse(value) ?? 0.0;
+          } else {
+            valDouble = entryBlock.fAbsentValue;
+          }
+          final encodedBytes = CodeReader.encode(valDouble, reprCode, size);
+          await newFile.writeFrom(encodedBytes);
+        }
+        step++;
+      }
+      //Cập nhật preAdr và nextAdr cho record tiếp theo
+      preAdr = nextAdr;
+      nextAdr = preAdr + framePerRecordNew * entryBlock.nDataFrameSize;
+      print('[DEBUG] Sau record $i: preAdr=$preAdr, nextAdr=$nextAdr');
+    }
+
+    await newFile.close();
+    return;
   }
 
   /// Ghi giá trị Depth vào tất cả các data record (type 0), mỗi record giảm dần 0.5
