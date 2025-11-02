@@ -98,6 +98,13 @@ class LisFileParser {
     entryBlock = EntryBlock();
   }
 
+  //Dùng để đổi thập phân ra byte cho trường hợp preAdr, next Address
+  Uint8List intToLittleEndianBytes(int value) {
+    final bytes = ByteData(4); // 4 bytes = 32-bit
+    bytes.setUint32(0, value, Endian.little);
+    return bytes.buffer.asUint8List();
+  }
+
   double parseTimeToSeconds(String timeStr) {
     final parts = timeStr.split(':').map((e) => e.trim()).toList();
     double seconds = 0;
@@ -480,17 +487,21 @@ class LisFileParser {
     int numRec =
         (totalBytesToWrite / (framePerRecordNew * entryBlock.nDataFrameSize))
             .ceil();
+    // Track addresses for blank headers (16-byte headers) and data records
     int preAdr, nextAdr;
-
-    //Đọc 4byte từ file gốc tại startAdrSave để lấy preAdr
-    //Di chuyển đầu đọc tới vị trí startAdrSave+4
-    if (startAdrSave == null) {
-      throw Exception('startAdrSave cannot be null');
-    }
     await file!.setPosition(startAdrSave + 4);
     final preAdrBytes = await file!.read(4);
     preAdr = ByteData.sublistView(preAdrBytes).getInt32(0, Endian.little);
-    nextAdr = preAdr + framePerRecordNew * entryBlock.nDataFrameSize;
+    // nextAdr phải = địa chỉ blank header hiện tại + 16 (blank header)
+    //                 + (lengthNew) của record (2 len + 2 zero + 2 type + 4 depth + frame bytes)
+    // Ở đây lengthNew = 6 (len+zero+type) + 4 (depth) + framePerRecordNew * frameSize
+    // Tuy nhiên để đồng nhất với length field (2 byte) đang set ở dưới là
+    // framePerRecordNew * frameSize + 6, ta cộng thêm 4 (depth) ngay phần ghi depth.
+    // Do công thức dưới đã cộng 6 + frameSize, và ta ghi depth 4 byte riêng, nên
+    // tổng dịch chuyển nextAdr = 16 + (6 + frameSize) + 4 = 16 + 10 + frameSize.
+    // Để tránh nhầm lẫn, ta vẫn giữ cách tính hiện tại tương thích với lengthNew phía dưới:
+    nextAdr =
+        startAdrSave + 16 + 6 + framePerRecordNew * entryBlock.nDataFrameSize;
 
     print('[DEBUG] totalBytesToWrite: $totalBytesToWrite');
     print('[DEBUG] framePerRecordNew: $framePerRecordNew');
@@ -499,33 +510,44 @@ class LisFileParser {
     print('[DEBUG] numRec: $numRec');
     print('[DEBUG] length per record: ${entryBlock.nDataFrameSize}');
 
-    //Tính Depth record
-    //double depthRecord = tableData[0]['DEPT'] * 100;
-
+    // Depth trong file LIS (Nga) thường lưu theo đơn vị centi-đơn-vị (x100)
     double depthRecord = 0.0;
     var val = tableData.isNotEmpty ? tableData[0]['DEPT'] : null;
     if (val is num) {
-      depthRecord = val.toDouble();
+      depthRecord = val.toDouble() * 100;
     } else if (val is String && val != 'NULL') {
-      depthRecord = double.tryParse(val) ?? 0.0;
+      depthRecord = (double.tryParse(val) ?? 0.0) * 100;
     }
 
     int step = 0;
     //Duyệt qua các row trong numRec
-    for (int i = 0; i < numRec; i++) {
+    // Địa chỉ blank header hiện tại trong file mới (để tự kiểm tra logic nextAdr)
+    int curBlankAddr = startAdrSave;
+    for (int i = 0; i < 2; i++) {
       //Ghi 16 byte blank record header
       //Ghi 4 byte 0
       final headerBytes = ByteData(4)..setInt32(0, 0, Endian.little);
       await newFile.writeFrom(headerBytes.buffer.asUint8List());
 
       //Ghi preAdr
-      final preAdrBytes = ByteData(4)..setInt32(0, preAdr, Endian.little);
-      await newFile.writeFrom(preAdrBytes.buffer.asUint8List());
+      final preAdrBytes = intToLittleEndianBytes(preAdr);
+      print('[DEBUG] preAdr: $preAdr');
+      print(
+        '[DEBUG] preAdrBytes: ${preAdrBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
+      await newFile.writeFrom(preAdrBytes);
       //Ghi nextAdr
-      final nextAdrBytes = ByteData(4)..setInt32(0, nextAdr, Endian.little);
-      await newFile.writeFrom(nextAdrBytes.buffer.asUint8List());
+      final nextAdrBytes = intToLittleEndianBytes(
+        nextAdr,
+      ); // trả về Uint8List hoặc List<int>
+      print('[DEBUG] nextAdr: $nextAdr');
+      print(
+        '[DEBUG] nextAdrBytes: ${nextAdrBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+      );
+      await newFile.writeFrom(nextAdrBytes);
       //Ghi length Record
-      int lengthNew = framePerRecordNew * entryBlock.nDataFrameSize + 4;
+      int lengthNew = framePerRecordNew * entryBlock.nDataFrameSize + 6 + 4;
+
       final lengthBytes = ByteData(2)..setInt16(0, lengthNew, Endian.big);
       await newFile.writeFrom(lengthBytes.buffer.asUint8List());
       //Ghi 2 byte 0
@@ -552,46 +574,67 @@ class LisFileParser {
         'lengthBytes: ${lengthBytes.buffer.asUint8List().map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
       );
 
+      //Ghi dữ liệu frame
       for (int i = 0; i < framePerRecordNew; i++) {
-        if (step >= tableData.length) {
-          //Ghi absent value cho các frame còn lại
-          final absentValue = entryBlock.fAbsentValue;
-          final absentBytes = CodeReader.encode32BitFloat(absentValue);
-          for (int j = 0; j < entryBlock.nDataFrameSize; j += 4) {
-            await newFile.writeFrom(absentBytes);
-          }
-          continue;
-        }
+        // Nếu hết dữ liệu, ghi absent value cho các frame còn lại để tránh RangeError
+        // if (step >= tableData.length) {
+        //   final absentValue = entryBlock.fAbsentValue;
+        //   final absentBytes = CodeReader.encode32BitFloat(absentValue);
+        //   // Ghi full frame bằng absent value (giả định 4-byte float từng ô)
+        //   for (int j = 0; j < entryBlock.nDataFrameSize; j += 4) {
+        //     await newFile.writeFrom(absentBytes);
+        //   }
+        //   continue;
+        // }
+        print('[DEBUG] inner i=$i, step=$step, tableLen=${tableData.length}');
         final row = tableData[step];
-        //Ghi từng cột theo thứ tự trong columnNames
-        for (final col in columnNames) {
-          final value = row[col];
-          final datum = datumBlocks.firstWhere(
-            (d) => d.mnemonic == col,
-            orElse: () => DatumSpecBlock.empty(col),
-          );
-          final reprCode = datum.reprCode;
-          final size = datum.size;
-          double valDouble = 0.0;
-          if (value is num) {
-            valDouble = value.toDouble();
-          } else if (value is String && value != 'NULL') {
-            valDouble = double.tryParse(value) ?? 0.0;
-          } else {
-            valDouble = entryBlock.fAbsentValue;
+        //Đọc Adr trong tableData
+        final adr = row['Adr'];
+        if (adr != null) {
+          final parts = adr.toString().split(':');
+          if (parts.length == 2) {
+            final recordIdx = int.tryParse(parts[0]) ?? 0;
+            final frameIdx = int.tryParse(parts[1]) ?? 0;
+            final offset = calcFrameOffset(
+              recordIdx,
+              frameIdx,
+              entryBlock.nDataFrameSize,
+            );
+
+            await file!.setPosition(offset);
+            final frameBytes = await file!.read(entryBlock.nDataFrameSize);
+            // print(
+            //   '[DEBUG] frameBytes: ${frameBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}',
+            // );
+            print('[DEBUG] frameBytes size: ${frameBytes.length}');
+            print(
+              '[DEBUG] Writing frame at position: ${await newFile.position()}',
+            );
+            await newFile.writeFrom(frameBytes);
           }
-          final encodedBytes = CodeReader.encode(valDouble, reprCode, size);
-          await newFile.writeFrom(encodedBytes);
         }
         step++;
       }
+
       //Cập nhật preAdr và nextAdr cho record tiếp theo
-      preAdr = nextAdr;
-      nextAdr = preAdr + framePerRecordNew * entryBlock.nDataFrameSize;
+      // Logic mong muốn: nextAdr == curBlankAddr + 16 + lengthNew (+ 4 bytes depth đã ghi riêng)
+      final expectedNext =
+          curBlankAddr + 16 + lengthNew; // phần lengthNew như đã set ở trên
+      if (nextAdr != expectedNext) {
+        print(
+          '[WARN] nextAdr != expectedNext ($nextAdr != $expectedNext). Kiểm tra lại công thức tính!',
+        );
+      }
+      preAdr =
+          curBlankAddr; // prevAddr của bản ghi kế tiếp là địa chỉ blank header hiện tại
+      curBlankAddr = nextAdr; // di chuyển sang blank header kế tiếp
+      nextAdr =
+          curBlankAddr + 16 + lengthNew; // thiết lập nextAdr cho vòng lặp sau
       print('[DEBUG] Sau record $i: preAdr=$preAdr, nextAdr=$nextAdr');
     }
 
     await newFile.close();
+
     return;
   }
 
